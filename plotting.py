@@ -58,7 +58,7 @@ def add_envelope_to_memory_map(
     if save:
         assert fp_dir is not None
         fig.savefig(f"{fp_dir}/{title.replace(' ', '_')}_with_envelope.pdf")
-        fig.savefig(f"{fp_dir}/{title.replace(' ', '_')}_with_envelope.svg")
+        # fig.savefig(f"{fp_dir}/{title.replace(' ', '_')}_with_envelope.svg")
 
     if not shade:
         return fig, ax, x_min, _x_max, _y_min, _y_max
@@ -78,7 +78,7 @@ def add_envelope_to_memory_map(
     if save:
         assert fp_dir is not None
         fig.savefig(f"{fp_dir}/{title.replace(' ', '_')}_with_shading.pdf")
-        fig.savefig(f"{fp_dir}/{title.replace(' ', '_')}_with_shading.svg")
+        # fig.savefig(f"{fp_dir}/{title.replace(' ', '_')}_with_shading.svg")
 
     return fig, ax, x_min, _x_max, _y_min, _y_max
 
@@ -145,7 +145,7 @@ def _make_memory_map(
     if save:
         assert fp_dir is not None
         fig.savefig(f"{fp_dir}/{title.replace(' ', '_')}.pdf")
-        fig.savefig(f"{fp_dir}/{title.replace(' ', '_')}.svg")
+        # fig.savefig(f"{fp_dir}/{title.replace(' ', '_')}.svg")
 
     return fig, ax, x_min, x_max, y_min, y_max
 

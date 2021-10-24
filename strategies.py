@@ -154,6 +154,20 @@ def greedy_by_longest(
 
 MemEvent = namedtuple("MemEvent", "ptr_addr size ts")
 
+from z3 import Optimize, Bools, Not, And
+
+
+def solve_z3():
+    a, b, c = Bools("a b c")
+    o = Optimize()
+    o.add(a == c)
+    o.add(Not(And(a, b)))
+    o.add_soft(a, 2)
+    o.add_soft(b, 3)
+    o.add_soft(c, 1)
+    print(o.check())
+    print(o.model())
+
 
 def bump_allocator(mem_events: List[MemEvent]):
     mem_events.sort(key=lambda r: r.ts)
@@ -212,6 +226,10 @@ def solve_cp(required_allocs: List[RequiredAlloc]):
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)
+
+    # # https://github.com/google/or-tools/blob/stable/ortools/sat/doc/model.md#model-copy
+    # copy = cp_model.CpModel()
+    # copy.CopyFrom(model)
 
     if status == cp_model.OPTIMAL:
         res = []
