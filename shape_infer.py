@@ -332,18 +332,28 @@ from torch import nn
 
 
 def test_partial_eval_stitching():
-    conv1 = torch.nn.Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-    max_pool = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
-    conv2 = nn.Conv2d(64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+    conv1 = torch.nn.Conv2d(
+        3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False
+    )
+    max_pool = torch.nn.MaxPool2d(
+        kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False
+    )
+    conv2 = nn.Conv2d(
+        64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False
+    )
 
-    mod = torch.jit.freeze(torch.jit.script(nn.Sequential(conv1, max_pool, conv2).eval()))
+    mod = torch.jit.freeze(
+        torch.jit.script(nn.Sequential(conv1, max_pool, conv2).eval())
+    )
 
     # conv1_output = conv1(torch.rand(1, 3, 224, 224))
     # max_pool_ouput = max_pool(conv1_output)
     # conv2_output = conv2(max_pool_ouput)
 
     # shape_compute_graph = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(mod.graph)
-    shape_compute_graph = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(mod.graph)
+    shape_compute_graph = (
+        torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(mod.graph)
+    )
 
     for n in mod.graph.nodes():
         try:
@@ -367,7 +377,9 @@ def test_partial_eval_stitching():
     g.makeMultiOutputIntoTuple()
     func = torch._C._create_function_from_graph("partial_eval_graph", g)
     sym_outputs = func([1, 3, 224, 224])
-    nodes = [mod.graph.findNode("aten::max_pool2d")] + list(mod.graph.findAllNodes("aten::conv2d"))
+    nodes = [mod.graph.findNode("aten::max_pool2d")] + list(
+        mod.graph.findAllNodes("aten::conv2d")
+    )
     # output_shapes = [max_pool_ouput, conv1_output, conv2_output]
 
     # for node, output_shape in zip(nodes, output_shapes):
@@ -384,7 +396,9 @@ def test_partial_eval_stitching():
 def partial_eval_graph_conv():
     inp = torch.randn(20, 16, 5, 10)
     mm = torch.jit.freeze(torch.jit.script(nn.Conv2d(16, 33, 3, stride=2).eval()))
-    shape_compute_graph = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(mm.graph)
+    shape_compute_graph = (
+        torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(mm.graph)
+    )
     output_sizes = mm.graph.findNode("aten::conv2d").output().type().symbolic_sizes()
     print(output_sizes)
     # calculating 0, 2 and 3 index
@@ -419,17 +433,26 @@ def get_symbolic_dim_names(mod, inp_shapes: List[List[int]] = []):
     # print(mod.graph)
 
     for n in mod.graph.nodes():
-        if n.kind() == "prim::Constant": continue
+        if n.kind() == "prim::Constant":
+            continue
         try:
-            print("kind: ", n.kind(), "; sym sizes: ", n.output().type().symbolic_sizes())
+            print(
+                "kind: ", n.kind(), "; sym sizes: ", n.output().type().symbolic_sizes()
+            )
         except:
             pass
 
 
 def basic_examples():
-    conv1 = torch.nn.Conv2d(3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-    max_pool = torch.nn.MaxPool2d(kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
-    conv2 = nn.Conv2d(64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+    conv1 = torch.nn.Conv2d(
+        3, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False
+    )
+    max_pool = torch.nn.MaxPool2d(
+        kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False
+    )
+    conv2 = nn.Conv2d(
+        64, 128, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False
+    )
 
     # get_symbolic_dim_names(conv1)
     # get_symbolic_dim_names(max_pool, inp_shapes=[None, [-2, 64, -3, -4]])
@@ -452,6 +475,7 @@ def label_constants(graph):
         if n.kind() == "prim::Constant":
             n.output().setDebugName(n.output().debugName() + ".constant")
 
+
 def backtrace_symbolic_outputs(op_shape_graph):
     print(op_shape_graph)
 
@@ -466,6 +490,7 @@ def backtrace_symbolic_outputs(op_shape_graph):
     bfs(op_shape_graph.return_node().input())
     print()
 
+
 def print_shape_graph(model):
     frozen_model = torch.jit.freeze(torch.jit.script(model.eval()))
     torch._C._jit_pass_remove_mutation(frozen_model.graph)
@@ -478,7 +503,11 @@ def print_shape_graph(model):
 
     label_constants(frozen_model.graph)
 
-    shape_compute_graph = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(frozen_model.graph)
+    shape_compute_graph = (
+        torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(
+            frozen_model.graph
+        )
+    )
     g = shape_compute_graph.partial_eval_shape_graph()
     # print("Shape Compute Graph Before DCE\n\n")
     # print(g)
@@ -487,8 +516,10 @@ def print_shape_graph(model):
     torch._C._jit_pass_dce(g)
     # print("Shape Compute Graph \n\n")
     # print(g)
-    op_shape_graphs = sorted(list(shape_compute_graph.partial_evaluated_graphs().items()),
-                             key=lambda x: x[0].output().debugName())
+    op_shape_graphs = sorted(
+        list(shape_compute_graph.partial_evaluated_graphs().items()),
+        key=lambda x: x[0].output().debugName(),
+    )
     for nn, gg in op_shape_graphs:
         for n in gg.findAllNodes("prim::RaiseException"):
             n.destroy()
@@ -506,14 +537,15 @@ def print_shape_graph(model):
 def print_op_shape_graphs(model):
     frozen_model = torch.jit.freeze(torch.jit.script(model.eval()))
     for n in frozen_model.graph.nodes():
-        if n.kind() == "prim::Constant": continue
+        if n.kind() == "prim::Constant":
+            continue
         try:
             print(n.kind(), n.output().type().symbolic_sizes())
         except:
             pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     torch._C._jit_set_symbolic_shapes_test_mode(True)
 
     model = torch.hub.load("pytorch/vision:v0.10.0", "resnet18")
