@@ -6,3 +6,5 @@ find_package(pybind11 REQUIRED)  # or `add_subdirectory(pybind11)`
 
 add_library(runtime_patch SHARED runtime_patch.cpp)
 target_link_libraries(runtime_patch PRIVATE pybind11::embed dl)
+
+add_executable(demo demo.cpp)
