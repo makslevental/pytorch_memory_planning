@@ -2,37 +2,37 @@ from collections import namedtuple
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial, total_ordering
-from operator import attrgetter
+from pprint import pprint
 from typing import List, Dict
 
+from intervaltree import IntervalTree
 from ortools.linear_solver import pywraplp
 from ortools.sat.python import cp_model
+from z3 import Optimize, Bools, Not, And
 
 
-def intersect(xs, ys):
-    return max(xs[1], ys[1]) - min(xs[0], ys[0]) - (xs[1] - xs[0]) - (ys[1] - ys[0])
+def valid_add(a, b):
+    return a + b >= a
 
 
-def intersect_mem(xs, ys):
-    return intersect(xs, ys) < 0
+def valid_sub(a, b):
+    return a >= b
 
 
-def intersect_lvr(xs, ys):
-    return intersect(xs, ys) <= 0
+def overlap(a, b, c, d):
+    assert a <= b
+    assert c <= d
 
+    outer_len = max(b, d) - min(a, c)
+    interval_len_1 = b - a
+    interval_len_2 = d - c
 
-def intersect_allocs(alloc1, alloc2):
-    ((begin1, end1), (offset1, size1)) = alloc1
-    ((begin2, end2), (offset2, size2)) = alloc2
-    interse = intersect_lvr((begin1, end1), (begin2, end2)) and intersect_mem(
-        (offset1, offset1 + size1), (offset2, offset2 + size2)
-    )
-
-    if interse:
-        print((begin1, end1), (begin2, end2))
-        print((offset1, offset1 + size1), (offset2, offset2 + size2))
-
-    return interse
+    if not valid_add(interval_len_1, interval_len_2) or not valid_sub(
+            outer_len, interval_len_1 + interval_len_2
+    ):
+        return True
+    else:
+        return False
 
 
 @total_ordering
@@ -50,8 +50,37 @@ class LiveRange:
     def __len__(self):
         return self.end - self.begin + 1
 
-    def intersect(self, other):
-        return intersect_lvr((self.begin, self.end), (other.begin, other.end))
+    def overlap(self, other):
+        return overlap(self.begin, self.end + 1, other.begin, other.end + 1)
+
+    def __str__(self):
+        return f"{(self.begin, self.end)}"
+
+
+@total_ordering
+@dataclass
+class MemRegion:
+    offset: int
+    size: int
+
+    def __eq__(self, other):
+        return self.offset == other.begin and self.size == other.end
+
+    def __lt__(self, other):
+        return self.offset < other.begin and self.size < other.begin
+
+    def __len__(self):
+        return self.size - self.offset + 1
+
+    def overlap(self, other):
+        return overlap(self.offset, self.size, other.begin, other.end)
+
+    @property
+    def next_free_addr(self):
+        return self.offset + self.size
+
+    def __str__(self):
+        return f"{(self.offset, self.size)}"
 
 
 @dataclass
@@ -60,20 +89,27 @@ class RequiredAlloc:
     size: int
     ptr_addr: str
 
+    def __str__(self):
+        return f"{self.lvr}:{self.size}"
+
 
 @dataclass
 class PlannedAlloc:
     lvr: LiveRange
-    offset: int
-    size: int
-
-    @property
-    def next_free_addr(self):
-        return self.offset + self.size
+    mem_region: MemRegion
 
     @classmethod
     def from_req(cls, req_alloc: RequiredAlloc, offset: int):
-        return PlannedAlloc(req_alloc.lvr, offset, req_alloc.size)
+        return PlannedAlloc(req_alloc.lvr, MemRegion(offset, req_alloc.size))
+
+    def __str__(self):
+        return f"{self.lvr}:{self.mem_region}"
+
+    def __repr__(self):
+        return str(self)
+
+    def overlap(self, other):
+        return self.lvr.overlap(other.lvr) and self.mem_region.overlap(other.mem_region)
 
 
 class GapPriority(Enum):
@@ -82,32 +118,34 @@ class GapPriority(Enum):
 
 
 def find_gap(
-    record: RequiredAlloc,
-    ordered_allocs: List[PlannedAlloc],
-    *,
-    GAP_PRIORITY: GapPriority = GapPriority.SMALLEST,
+        record: RequiredAlloc,
+        current_allocs: Dict[str, PlannedAlloc],
+        interval_tree: IntervalTree,
+        *,
+        GAP_PRIORITY: GapPriority = GapPriority.SMALLEST,
 ):
     best_gap = float("inf")
     best_offset = None
     prev_offset = 0
 
-    for alloc in ordered_allocs:
-        if not intersect_lvr(
-            (alloc.lvr.begin, alloc.lvr.end), (record.lvr.begin, record.lvr.end)
-        ):
-            continue
-
+    overlapping_sorted_allocs = [
+        current_allocs[interval.data]
+        for interval in interval_tree.overlap(record.lvr.begin, record.lvr.end + 1)
+        if interval.data in current_allocs and interval.data != record.ptr_addr
+    ]
+    overlapping_sorted_allocs.sort(key=lambda x: x.mem_region.offset)
+    for alloc in overlapping_sorted_allocs:
         # offset_x will be ahead of the previous block
         # while prev_offset will be just in front
         # this looks for small gap ahead of a block
-        gap = alloc.offset - prev_offset
+        gap = alloc.mem_region.offset - prev_offset
         if record.size <= gap < best_gap:
             best_offset = prev_offset
             if GAP_PRIORITY == GapPriority.FIRST:
                 break
             best_gap = gap
 
-        prev_offset = max(prev_offset, alloc.next_free_addr)
+        prev_offset = max(prev_offset, alloc.mem_region.next_free_addr)
 
     if best_offset is None:
         best_offset = prev_offset
@@ -115,28 +153,28 @@ def find_gap(
 
 
 def _greedy_by_size(
-    sorted_req_mem_allocs: List[RequiredAlloc],
-    gap_finder,
+        sorted_req_mem_allocs: List[RequiredAlloc],
+        gap_finder,
 ):
-    ordered_allocs: List[PlannedAlloc] = []
+    current_allocs: Dict[str, PlannedAlloc] = {}
+    interval_tree = IntervalTree.from_tuples(
+        (req.lvr.begin, req.lvr.end + 1, req.ptr_addr) for req in sorted_req_mem_allocs
+    )
     inorder_of_decision_allocs: List[PlannedAlloc] = []
     for mem_alloc in sorted_req_mem_allocs:
-        best_offset = gap_finder(mem_alloc, ordered_allocs)
+        best_offset = gap_finder(mem_alloc, current_allocs, interval_tree)
 
         p = PlannedAlloc.from_req(mem_alloc, best_offset)
         inorder_of_decision_allocs.append(p)
-        ordered_allocs.append(p)
-
-        # sort by offset
-        ordered_allocs.sort(key=attrgetter("offset"))
+        current_allocs[mem_alloc.ptr_addr] = p
 
     return inorder_of_decision_allocs
 
 
 def greedy_by_size(
-    req_mem_allocs: List[RequiredAlloc],
-    *,
-    gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
+        req_mem_allocs: List[RequiredAlloc],
+        *,
+        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
 ):
     # biggest size first but break ties deterministically
     req_mem_allocs.sort(key=lambda r: (r.size, r.lvr), reverse=True)
@@ -144,17 +182,15 @@ def greedy_by_size(
 
 
 def greedy_by_longest(
-    req_mem_allocs: List[RequiredAlloc],
-    *,
-    gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
+        req_mem_allocs: List[RequiredAlloc],
+        *,
+        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
 ):
-    req_mem_allocs.sort(key=lambda r: len(r.lvr), reverse=True)
+    req_mem_allocs.sort(key=lambda r: (len(r.lvr), r.lvr), reverse=True)
     return _greedy_by_size(req_mem_allocs, gap_finder)
 
 
 MemEvent = namedtuple("MemEvent", "ptr_addr size ts")
-
-from z3 import Optimize, Bools, Not, And
 
 
 def solve_z3():
@@ -177,13 +213,13 @@ def bump_allocator(mem_events: List[MemEvent]):
     for ptr_addr, size, ts in mem_events:
         if size > 0:
             planned_allocations[ptr_addr] = PlannedAlloc(
-                LiveRange(ts, -1), next_offset, size
+                LiveRange(ts, -1), MemRegion(next_offset, size)
             )
             next_offset += size
             curr_allocs += 1
         elif size < 0:
             assert ptr_addr in planned_allocations
-            assert planned_allocations[ptr_addr].size == -size
+            assert planned_allocations[ptr_addr].mem_region.size == -size
             assert planned_allocations[ptr_addr].lvr.begin < ts
             planned_allocations[ptr_addr].lvr.end = ts
             curr_allocs -= 1
@@ -261,8 +297,8 @@ def solve_mip(required_allocs: List[RequiredAlloc]):
     # and z_ij = 1 if the converse offset_j + mem_j <= offset_i
     # (note there could be a gap if we stick a block in between them
     for i, r1 in enumerate(required_allocs):
-        for j, r2 in enumerate(required_allocs[i + 1 :], start=i + 1):
-            if r1.lvr.intersect(r2.lvr):
+        for j, r2 in enumerate(required_allocs[i + 1:], start=i + 1):
+            if r1.lvr.overlap(r2.lvr):
                 inters = solver.IntVar(0.0, 1, f"inters_{{{i},{j}}}")
                 # if z_ij = 0 then i < j then offsets[i] + mems[i] <= offsets[j]
                 # but if z_ij = 1 then j < i then offsets[i] + mems[i] <= offsets[j] + max_mem
@@ -322,6 +358,71 @@ def verify_allocation(allocations):
         for j, alloc2 in enumerate(allocations):
             if i == j:
                 continue
-            if intersect_allocs(alloc1, alloc2):
+            if alloc1.overlap(alloc2):
                 return False
     return True
+
+
+if __name__ == "__main__":
+    lvrs = {
+        (0, 3): 1024,
+        (1, 3): 1024,
+        (3, 4): 1024,
+        (5, 10): 256,
+        (6, 14): 256,
+        (7, 10): 256,
+        (8, 9): 256,
+        (9, 12): 256,
+        (10, 12): 256,
+        (13, 14): 256,
+    }
+    print("LSTMGreedyBySizeWithSmallestGap")
+    res = greedy_by_size(
+        [
+            RequiredAlloc(LiveRange(begin, end), size, str(i))
+            for i, ((begin, end), size) in enumerate(lvrs.items())
+        ],
+        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
+    )
+    res.sort(key=lambda x: x.lvr.begin)
+    pprint(res)
+    print()
+
+    print("LSTMGreedyBySizeWithFirstGap")
+    res = greedy_by_size(
+        [
+            RequiredAlloc(LiveRange(begin, end), size, str(i))
+            for i, ((begin, end), size) in enumerate(lvrs.items())
+        ],
+        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST),
+    )
+    res.sort(key=lambda x: x.lvr.begin)
+    pprint(res)
+    print()
+
+    print("LSTMGreedyByLongestAndSizeWithSmallestGap")
+    res = greedy_by_longest(
+        [
+            RequiredAlloc(LiveRange(begin, end), size, str(i))
+            for i, ((begin, end), size) in enumerate(lvrs.items())
+        ],
+        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
+    )
+    res.sort(key=lambda x: x.lvr.begin)
+    pprint(res)
+    print()
+
+    print("LSTMGreedyByLongestAndSizeWithFirstGap")
+    res = greedy_by_longest(
+        [
+            RequiredAlloc(LiveRange(begin, end), size, str(i))
+            for i, ((begin, end), size) in enumerate(lvrs.items())
+        ],
+        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST),
+    )
+    res.sort(key=lambda x: x.lvr.begin)
+    pprint(res)
+
+# TODO: buddy allocator
+# TODO: mincost flow
+# TODO: graph coloring
