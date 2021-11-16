@@ -7,7 +7,7 @@ models = torchvision.models
 
 model_pairs = (
     # ("mobilenet_v3_small", models.mobilenet_v3_small),
-    # ("mobilenet_v2", models.mobilenet_v2),
+    # ("mobilenet_v2.txt", models.mobilenet_v2.txt),
     ("inception_v3", models.inception_v3()),
     # ("resnet", models.resnet18)
     # ("deeplab", models.segmentation.deeplabv3_resnet50()), # TODO: need a couple more ops

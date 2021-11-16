@@ -2,7 +2,6 @@ from collections import defaultdict
 from pprint import pprint
 from typing import List
 
-import torch
 from torch import nn
 from wolframclient.evaluation import WolframLanguageSession
 from wolframclient.language import wlexpr, wl
@@ -11,6 +10,7 @@ from wolframclient.language import wlexpr, wl
 # logging.basicConfig()
 # logging.getLogger().setLevel(logging.DEBUG)
 # logging.getLogger('foo').debug('bah')
+from example_models import make_transformer
 
 
 def get_symbolic_dim_names(
@@ -27,20 +27,27 @@ def get_symbolic_dim_names(
         if n.kind() == "prim::Constant":
             continue
         try:
+            # sym_sizes = [
+            #     "(" + (simplified[sym_shape_to_val_debug_name[f"SS({s})"]] if s < 0 else str(s)) + ")"
+            #     for s in n.output().type().symbolic_sizes()
+            #     # if s < 0
+            # ]
             sym_sizes = [
-                "(" + (simplified[sym_shape_to_val_debug_name[s]] if s < 0 else str(s)) + ")"
+                  (simplified[f"SS({s})"] if s < 0 else str(s))
                 for s in n.output().type().symbolic_sizes()
                 # if s < 0
-            ] 
+            ]
             # + [f'Symbol["{n.output().debugName()}"]']
 
-            print(n.kind(), "*".join(sym_sizes))
+            # print(r"\mathtt{\%"+n.output().debugName()+"}", "&=", r" \times ".join(sym_sizes))#, r"&= \epsilon \times 128 \times \frac{\gamma}{8}\times \frac{\delta}{8}", r"&= 2 \epsilon \gamma \delta", r"\\")
+            # print(r"\mathtt{\%"+n.output().debugName()+": "+n.kind().replace("aten::","")+"}", r"&=", r" \times ".join(sym_sizes), r"\\")#, r"&= \epsilon \times 128 \times \frac{\gamma}{8}\times \frac{\delta}{8}", r"&= 2 \epsilon \gamma \delta", r"\\")
             all_sizes.append(f"({'*'.join(sym_sizes)})")
-            # print(n.kind(), "[" + ", ".join(sym_sizes) + "]")
-        except:
-            pass
+            print(n.output().debugName(), "[" + ", ".join(sym_sizes) + "]")
+        except Exception as e:
+            print(e)
 
     # print("+".join(all_sizes))
+
 
 def label_constants(graph):
     for n in graph.nodes():
@@ -142,7 +149,7 @@ def eval_backtrace_symbolic_outputs(op_shape_graph):
                 a_name, b_name = a.debugName(), b.debugName()
                 return f"({res[a_name]} / {res[b_name]})"
             elif inp.node().kind() == "aten::Int":
-                a = inp.node().input() 
+                a = inp.node().input()
                 return f"{res[a.debugName()]}"
             elif inp.node().kind() == "prim::If":
                 cond = dfs(inp.node().input())
@@ -157,6 +164,15 @@ def eval_backtrace_symbolic_outputs(op_shape_graph):
                 a, b = list(inp.node().inputs())
                 a_name, b_name = a.debugName(), b.debugName()
                 return f"({res[a_name]} == {res[b_name]})"
+            elif inp.node().kind() == "aten::mul":
+                a, b = list(inp.node().inputs())
+                a_name, b_name = a.debugName(), b.debugName()
+                return f"({res[a_name]} * {res[b_name]})"
+            elif inp.node().kind() == "prim::TupleConstruct":
+                ress = {}
+                for next_inp in inp.node().inputs():
+                    ress[next_inp.debugName()] = dfs(next_inp)
+                return ress
             else:
                 print(inp.node())
                 raise NotImplementedError
@@ -165,7 +181,73 @@ def eval_backtrace_symbolic_outputs(op_shape_graph):
     for inp in op_shape_graph.return_node().inputs():
         res[inp.debugName()] = dfs(inp)
 
+    if len(res) == 1 and isinstance(list(res.values())[0], dict):
+        res = list(res.values())[0]
     return res
+
+def eval_backtrace_symbolic_outputs_latex(op_shape_graph):
+    def dfs(inp):
+        val_name = inp.debugName()
+        if inp.node().kind() == "prim::Constant":
+            return inp.node().i("value")
+        elif inp.node().kind() == "prim::Param":
+            return val_name
+        else:
+            res = {}
+            for next_inp in inp.node().inputs():
+                res[next_inp.debugName()] = dfs(next_inp)
+
+            if inp.node().kind() == "aten::__getitem__":
+                obj, item = list(inp.node().inputs())
+                obj_name, item_name = obj.debugName(), item.debugName()
+                return f"{obj_name}[{res[item_name]}]"
+            elif inp.node().kind() == "aten::sub":
+                a, b = list(inp.node().inputs())
+                a_name, b_name = a.debugName(), b.debugName()
+                return f"{res[a_name]} - {res[b_name]}"
+            elif inp.node().kind() == "aten::add":
+                a, b = list(inp.node().inputs())
+                a_name, b_name = a.debugName(), b.debugName()
+                return f"{res[a_name]} + {res[b_name]}"
+            elif inp.node().kind() == "aten::floordiv":
+                a, b = list(inp.node().inputs())
+                a_name, b_name = a.debugName(), b.debugName()
+                return rf"\Floor*{{\begin{{matrix}}\dfrac{{ {res[a_name]} }}{{ {res[b_name]} }} \end{{matrix}} }}"
+            elif inp.node().kind() == "aten::div":
+                a, b = list(inp.node().inputs())
+                a_name, b_name = a.debugName(), b.debugName()
+                return f"\frac {{ {res[a_name]} }}{{ {res[b_name]} }}"
+            elif inp.node().kind() == "aten::Int":
+                a = inp.node().input()
+                return f"{res[a.debugName()]}"
+            elif inp.node().kind() == "prim::If":
+                cond = dfs(inp.node().input())
+                true_clause = dfs(list(list(inp.node().blocks())[0].outputs())[0])
+                false_clause = dfs(list(list(inp.node().blocks())[1].outputs())[0])
+                return f"If[{cond}, {true_clause}, {false_clause}]"
+            elif inp.node().kind() == "aten::remainder":
+                a, b = list(inp.node().inputs())
+                a_name, b_name = a.debugName(), b.debugName()
+                return f"Mod[{res[a_name]}, {res[b_name]}]"
+            elif inp.node().kind() == "aten::eq":
+                a, b = list(inp.node().inputs())
+                a_name, b_name = a.debugName(), b.debugName()
+                return f"({res[a_name]} == {res[b_name]})"
+            elif inp.node().kind() == "aten::mul":
+                a, b = list(inp.node().inputs())
+                a_name, b_name = a.debugName(), b.debugName()
+                return f"({res[a_name]} \times {res[b_name]})"
+            else:
+                print(inp.node())
+                return ""
+                raise NotImplementedError
+
+    res = {}
+    for inp in op_shape_graph.return_node().inputs():
+        res[inp.debugName()] = dfs(inp)
+
+    return res
+
 
 
 def get_shape_compute_graph(model, inp_shapes: List[List[int]]):
@@ -188,8 +270,6 @@ def get_shape_compute_graph(model, inp_shapes: List[List[int]]):
             if inp_shapes[i] is not None:
                 mod_input.setType(mod_input.type().with_sizes(inp_shapes[i]))
 
-    
-
     label_constants(frozen_model.graph)
     # remove_periods(frozen_model.graph)
 
@@ -207,6 +287,7 @@ def get_shape_compute_graph(model, inp_shapes: List[List[int]]):
     remove_periods(g)
     return shape_compute_graph, frozen_model
 
+
 def next_multiple(n, k):
     return n + (k - n % k)
 
@@ -221,6 +302,7 @@ def check_non_negative(array: List[int]) -> bool:
         if val < 0:
             non_negative = True
     return non_negative
+
 
 def check_shape_forward(input: List[int], weight_sizes: List[int], bias: Optional[List[int]], stride: List[int],
                         padding: List[int], dilation: List[int], groups: int):
@@ -290,6 +372,7 @@ def conv_output_size(input_size: List[int], weight_size: List[int], bias: Option
 
     return output_size
 
+
 # print(conv_output_size([1,3, 10, 10], [3, 32, 3, 3], bias=None, stride=[1, 1], padding=[0, 0], dilation=[1, 1], groups=1))
 
 # exit()
@@ -297,7 +380,7 @@ def conv_output_size(input_size: List[int], weight_size: List[int], bias: Option
 
 def get_shape_compute_elias(model, inp_shapes: List[List[int]]):
     model_frozen = torch.jit.freeze(torch.jit.script(model.eval()))
-    # print(model_frozen.graph)
+    print(model_frozen.graph)
 
     # until https://github.com/pytorch/pytorch/issues/65643 lands to clean up control flow..
     torch._C._jit_pass_propagate_shapes_on_graph(model_frozen.graph)
@@ -327,7 +410,7 @@ def get_shape_compute_elias(model, inp_shapes: List[List[int]]):
     inps[1].setType(inps[1].type().with_sizes([None, None, None, None]))
     shape_compute_graph = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(model_frozen.graph)
     g = shape_compute_graph.partial_eval_shape_graph()
-    
+
     # here is the encoding of shape arithmetic from the input, represnted as TS graph
     for node in g.findAllNodes("prim::RaiseException"):
         node.destroy()
@@ -366,15 +449,14 @@ def print_op_shape_graphs(model):
             pass
 
 
-def map_str_to_mathematica(s, vars={}):
-    assumptions = []
-    for v, rep in vars.items():
-        if s != s.replace(v, rep):
-            s = s.replace(v, rep)
-            assumptions.append(f"Mod[{rep}, 32] == 0, {rep} > 0")
+def map_str_to_mathematica(s, assumptions=[]):
+    # assumptions = []
+    # for v, rep in vars.items():
+    #     if s != s.replace(v, rep):
+    #         s = s.replace(v, rep)
+    #         assumptions.append(f"Mod[{rep}, 32] == 0, {rep} > 0")
     fs = f"FullSimplify[{s}, Assumptions -> {{{', '.join(assumptions)}}}]"
     return WEval(wl.Expand(wlexpr(fs)))
-
 
 
 class Interpolate(nn.Module):
@@ -383,13 +465,15 @@ class Interpolate(nn.Module):
         self.interp = nn.functional.interpolate
         self.size = size
         self.mode = mode
-        
+
     def forward(self, x):
         x = self.interp(x, size=self.size, mode=self.mode, align_corners=False)
         return x
 
+
 import torch
 import torch.utils.cpp_extension
+
 
 def register_op():
     op_source = """
@@ -426,30 +510,50 @@ def register_op():
         is_python_module=False,
         verbose=True,
     )
+    #
+    # print(torch.ops.my_ops.my_upsample_bilinear2d)
 
-    print(torch.ops.my_ops.my_upsample_bilinear2d)
+def translate(text, conversion_dict, before=None):
+    """
+    Translate words from a text using a conversion dictionary
+
+    Arguments:
+        text: the text to be translated
+        conversion_dict: the conversion dictionary
+        before: a function to transform the input
+        (by default it will to a lowercase)
+    """
+    # if empty:
+    if not text: return text
+    # preliminary transformation:
+    # before = before or str.lower
+    t = text
+    for key, value in conversion_dict.items():
+        t = t.replace(key, value)
+    return t
 
 # register_op()
 import torchvision
 
 if __name__ == "__main__":
     torch._C._jit_set_symbolic_shapes_test_mode(True)
-    models = torchvision.models
+    # models = torchvision.models
 
     # model = torch.hub.load("pytorch/vision:v0.10.0", "resnet18")
-    # model = torch.hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2')
+    # model = torch.hub.load('pytorch/vision:v0.10.0', 'mobilenet_v2.txt')
+    # model = torch.hub.load('pytorch/vision:v0.10.0', 'mobilenet_v3')
+    # model = mobilenet_v3_large()
     # model = torch.hub.load('pytorch/vision:v0.10.0', 'inception_v3')
     # model = torch.hub.load('pytorch/vision:v0.10.0', 'unet')
     # model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
     #     in_channels=3, out_channels=1, init_features=32, pretrained=True)
     # model = torch.hub.load('facebookresearch/pytorch_GAN_zoo:hub', 'DCGAN').netD
     model = torch.hub.load('pytorch/vision:v0.10.0', 'deeplabv3_resnet50')
-    print(model)
+    # print(model)
     model.eval()
-    out = model(torch.randn(1,3, 128, 128))
-    for k, v in out.items():
-        print(v.shape)
-    exit()
+    out = model(torch.randn(1, 3, 128, 128))
+    # for k, v in out.items():
+    #     print(v.shape)
     # model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg11')
     # model = torchvision.models.detection.maskrcnn_resnet50_fpn(pretrained=True)
     # model = models.shufflenet_v2_x1_0()
@@ -461,19 +565,88 @@ if __name__ == "__main__":
     # model = torch.hub.load("pytorch/vision:v0.10.0", "resnet34")
     # print_shape_graph(model)
 
-    shape_compute_graph, frozen_model = get_shape_compute_elias(model, [[None, None, None, None]])
-    # print(frozen_model.graph)
-    g = shape_compute_graph.partial_eval_shape_graph()
+    # shape_compute_graph, frozen_model = get_shape_compute_elias(model, [[None, None, None, None]])
+    shape_compute_graph, g, output_sym_map, frozen_model = make_transformer()
+    # g = shape_compute_graph.partial_eval_shape_graph()
+    print(frozen_model.graph)
     print(g)
-    output_sym_map = shape_compute_graph.graph_output_to_symbolic_shape_dim()
+    print(output_sym_map)
+    # output_sym_map = shape_compute_graph.graph_output_to_symbolic_shape_dim()
     # map from sym shape -> index
     sym_shape_to_index = {}
     sym_shape_to_val_debug_name = {}
-    for index, output in enumerate(g.outputs()):
-        sym_shape_to_index[output_sym_map[output]] = index
-        sym_shape_to_val_debug_name[output_sym_map[output]] = output.debugName()
-    
+    for index, output in enumerate(list(g.outputs())[0].node().inputs()):
+        d = output_sym_map["%"+output.debugName()]
+        sym_shape_to_index[d] = index
+        sym_shape_to_val_debug_name[f"SS({d})"] = f"%{output.debugName()}"
+
+    print("sym_shape_to_val_debug_name")
     print(sym_shape_to_val_debug_name)
+
+
+
+    greek_alphabet = [
+        r'|$\alpha$|',
+        r'|$\beta$|',
+        r'|$\gamma$|',
+        r'|$\delta$|',
+        r'|$\epsilon$|',
+        r'|$\zeta$|',
+        r'|$\eta$|',
+        r'|$\theta$|',
+        r'|$\iota$|',
+        r'|$\kappa$|',
+        r'|$\lambda$|',
+        r'|$\mu$|',
+        r'|$\nu$|',
+        r'|$\xi$|',
+        r'|$\omicron$|',
+        r'|$\pi$|',
+        r'|$\rho$|',
+        r'|$\sigma$|',
+        r'|$\tau$|',
+        r'|$\upsilon$|',
+        r'|$\phi$|',
+        r'|$\chi$|',
+        r'|$\psi$|',
+        r'|$\omega$|',
+    ]
+    greek_alphabet = [
+        r'\alpha',
+        r'\beta',
+        r'\gamma',
+        r'\delta',
+        r'\epsilon',
+        r'\zeta',
+        r'\eta',
+        r'\theta',
+        r'\iota',
+        r'\kappa',
+        r'\lambda',
+        r'\mu',
+        r'\nu',
+        r'\xi',
+        r'\omicron',
+        r'\pi',
+        r'\rho',
+        r'\sigma',
+        r'\tau',
+        r'\upsilon',
+        r'\phi',
+        r'\chi',
+        r'\psi',
+        r'\omega',
+    ]
+    greeks_to_idx = {g: i for i, g in enumerate(greek_alphabet)}
+    idx_to_greeks = {i: g for i, g in enumerate(greek_alphabet)}
+
+    input_syms = list(frozen_model.graph.inputs())[1].type().symbolic_sizes()
+
+    sym_to_greeks = {f"SS({v})": idx_to_greeks[i] for i,v in enumerate(input_syms)}
+    convs_to_greeks = {}
+    for i, (sym, conv) in enumerate(sym_shape_to_val_debug_name.items(), start=len(input_syms)):
+        sym_to_greeks[sym] = idx_to_greeks[i]
+        convs_to_greeks[conv] = idx_to_greeks[i]
 
     res = eval_backtrace_symbolic_outputs(g)
     ss_map = {
@@ -481,11 +654,14 @@ if __name__ == "__main__":
         "input_1[1]": "b",
         "input_1[2]": "c",
         "input_1[3]": "d",
+        "self.2[0]": "a",
+        "self.2[1]": "b",
     }
-    print()
+    ress = {k: translate(v, ss_map) for k,v in res.items()}
+    # print()
     print("orig:")
-    print()
-    pprint(res)
+    # print()
+    # pprint(ress)
     simplified = {}
     with WolframLanguageSession(
             kernel="/opt/Wolfram/WolframEngine/12.3/Executables/WolframKernel",
@@ -493,18 +669,18 @@ if __name__ == "__main__":
             initfile="/home/mlevental/dev_projects/pytorch_memory_planning/initkernel.m",
     ) as session:
         WEval = session.evaluate
-        for k, v in res.items():
-            if isinstance(v, str):
-                simplified[k] = map_str_to_mathematica(v, ss_map)
+        for k, v in ress.items():
+            if isinstance(v, str) and len(v) > 0:
+                simplified[translate("%"+k, convs_to_greeks)] = map_str_to_mathematica(v, [f"Mod[{rep}, 32] == 0, {rep} > 0" for rep in ss_map.values()])
     print()
     print("simplified:")
-    print()
-    pprint(simplified)
-
-    print()
-    get_symbolic_dim_names(
-        frozen_model, [[1, 3, 128, 128]], simplified, sym_shape_to_val_debug_name
-    )
+    for k, v in simplified.items():
+        print(k, "&=", v, r"\\")
+    #
+    # print("tensor sizes")
+    # get_symbolic_dim_names(
+    #     frozen_model, [[1, 3, 128, 128]], sym_to_greeks, sym_shape_to_val_debug_name
+    # )
 
     # op_graphs = get_op_shape_compute_graphs(shape_compute_graph)
     # for nn, gg in op_graphs:
@@ -518,5 +694,38 @@ if __name__ == "__main__":
     # print("resnet152")
     # model = torch.hub.load("pytorch/vision:v0.10.0", "resnet152")
     # print_shape_graph(model)
+    # frozen_graph = str(frozen_model.graph)
+    # frozen_graph = translate(frozen_graph, sym_shape_to_val_debug_name)
+    #
+    #
+    #
+    # frozen_graph = translate(frozen_graph, convs_to_greeks)
+    # frozen_graph = translate(frozen_graph, sym_to_greeks)
+    # print(frozen_graph)
+    #
+    # res = eval_backtrace_symbolic_outputs_latex(g)
+    # ss_map = {
+    #     "input_1[0]": r"\epsilon",
+    #     "input_1[1]": r"\beta",
+    #     "input_1[2]": r"\gamma",
+    #     "input_1[3]": r"\delta",
+    # }
+    # for k,v in res.items():
+    #     print(f"\mathtt{{{translate('%'+k, convs_to_greeks)}}}", "&=", translate(v, ss_map), r"\\")
 
+    frozen_graph = str(g)
+    frozen_graph = translate(frozen_graph, sym_shape_to_val_debug_name)
 
+    frozen_graph = translate(frozen_graph, convs_to_greeks)
+    frozen_graph = translate(frozen_graph, sym_to_greeks)
+    # print(frozen_graph)
+
+    res = eval_backtrace_symbolic_outputs_latex(g)
+    ss_map = {
+        "input_1[0]": r"\epsilon",
+        "input_1[1]": r"\beta",
+        "input_1[2]": r"\gamma",
+        "input_1[3]": r"\delta",
+    }
+    # for k, v in res.items():
+    #     print(f"\mathtt{{{translate('%' + k, convs_to_greeks)}}}", "&=", translate(v, ss_map), r"\\")

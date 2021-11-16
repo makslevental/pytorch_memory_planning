@@ -1,0 +1,50 @@
+model,dims,strategy,size
+resnet152,1x3x128x128,Greedy by Size,3145728
+resnet152,1x3x128x128,Greedy by Longest,3407872
+resnet152,1x3x128x128,Symbolic CSP,3145728
+resnet152,1x3x128x128,Symbolic MIP,3145727
+resnet152,1x3x128x128,Bump Allocator,74399744
+resnet152,1x3x128x128,Min-cost Flow,3670016
+resnet152,1x3x128x128,2-Allocation,3735552
+dcgan,1x3x128x128,Greedy by Size,2097152
+dcgan,1x3x128x128,Greedy by Longest,2097152
+dcgan,1x3x128x128,Symbolic CSP,2097152
+dcgan,1x3x128x128,Symbolic MIP,2097152
+dcgan,1x3x128x128,Bump Allocator,3932260
+dcgan,1x3x128x128,Min-cost Flow,2097152
+dcgan,1x3x128x128,2-Allocation,2097152
+mobilenet_v3_small,1x3x128x128,Greedy by Size,589824
+mobilenet_v3_small,1x3x128x128,Greedy by Longest,589824
+mobilenet_v3_small,1x3x128x128,Symbolic CSP,589824
+mobilenet_v3_small,1x3x128x128,Symbolic MIP,589824
+mobilenet_v3_small,1x3x128x128,Bump Allocator,3989536
+mobilenet_v3_small,1x3x128x128,Min-cost Flow,814784
+mobilenet_v3_small,1x3x128x128,2-Allocation,722944
+mobilenet_v3_large,1x3x128x128,Greedy by Size,2097152
+mobilenet_v3_large,1x3x128x128,Greedy by Longest,2097152
+mobilenet_v3_large,1x3x128x128,Symbolic CSP,2097152
+mobilenet_v3_large,1x3x128x128,Symbolic MIP,2097152
+mobilenet_v3_large,1x3x128x128,Bump Allocator,12149792
+mobilenet_v3_large,1x3x128x128,Min-cost Flow,2725184
+mobilenet_v3_large,1x3x128x128,2-Allocation,2469888
+mobilenet_v2,1x3x128x128,Greedy by Size,3145728
+mobilenet_v2,1x3x128x128,Greedy by Longest,3145728
+mobilenet_v2,1x3x128x128,Symbolic CSP,3145728
+mobilenet_v2,1x3x128x128,Symbolic MIP,3145728
+mobilenet_v2,1x3x128x128,Bump Allocator,16990208
+mobilenet_v2,1x3x128x128,Min-cost Flow,3915776
+mobilenet_v2,1x3x128x128,2-Allocation,3375104
+deeplabv3_resnet101,1x3x128x128,Greedy by Size,6291456
+deeplabv3_resnet101,1x3x128x128,Greedy by Longest,7340032
+deeplabv3_resnet101,1x3x128x128,Symbolic CSP,6291456
+deeplabv3_resnet101,1x3x128x128,Symbolic MIP,6291456
+deeplabv3_resnet101,1x3x128x128,Bump Allocator,152840192
+deeplabv3_resnet101,1x3x128x128,Min-cost Flow,8258560
+deeplabv3_resnet101,1x3x128x128,2-Allocation,8650752
+small_bert,1x3x128x128,Greedy by Size,96824
+small_bert,1x3x128x128,Greedy by Longest,96824
+small_bert,1x3x128x128,Symbolic CSP,96824
+small_bert,1x3x128x128,Symbolic MIP,96824
+small_bert,1x3x128x128,Bump Allocator,998376
+small_bert,1x3x128x128,Min-cost Flow,144536
+small_bert,1x3x128x128,2-Allocation,142240
