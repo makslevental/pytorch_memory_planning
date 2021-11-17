@@ -17,6 +17,7 @@ def make_resnets():
 
         y.save(f"models/{models_name}.pt")
 
+
 def make_mobilenets():
     x = torch.rand((1, 3, 224, 244))
 
@@ -35,6 +36,7 @@ def make_mobilenets():
     y = torch.jit.trace(model, (x,))
     y.save(f"models/mobilenet_v3_large.pt")
 
+
 def make_deeplab():
     x = torch.rand((1, 3, 224, 244))
 
@@ -44,8 +46,7 @@ def make_deeplab():
     y.save(f"models/deeplabv3_resnet101.pt")
 
 
-
-def make_bert():
+def make_bert_input():
     enc = BertTokenizer.from_pretrained("bert-base-uncased")
 
     # Tokenizing input text
@@ -61,19 +62,26 @@ def make_bert():
     # Creating a dummy input
     tokens_tensor = torch.tensor([indexed_tokens])
     segments_tensors = torch.tensor([segments_ids])
+    return tokens_tensor, segments_tensors
+
+
+def make_bert():
     config = BertConfig(
         vocab_size_or_config_json_file=32000,
-        hidden_size=768 // 4,
-        num_hidden_layers=12 // 4,
-        num_attention_heads=12 // 4,
-        intermediate_size=3072 // 4,
+        hidden_size=768,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        intermediate_size=3072,
         torchscript=True,
     )
 
+    inp = make_bert_input()
+
     model = BertModel(config)
     model.eval()
-    traced_model = torch.jit.trace(model, [tokens_tensor, segments_tensors])
-    torch.jit.save(traced_model, "models/small_bert.pt")
+    traced_model = torch.jit.trace(model, inp)
+    torch.jit.save(traced_model, "models/large_bert.pt")
+
 
 def make_transformer():
     # download model from https://drive.google.com/file/d/1FKNQ4TYBXU5ArhLr3a5szjAymqNz4Gnm/view?usp=sharing
@@ -96,7 +104,7 @@ def make_transformer():
     torch._C._jit_pass_canonicalize_for_shape_analysis(froze.graph)
     compute = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(froze.graph)
     eval_g = compute.partial_eval_shape_graph()
-    mapping = {"%"+n.debugName(): f"SS({v})" for n, v in compute.graph_output_to_symbolic_shape_dim().items()}
+    mapping = {"%" + n.debugName(): f"SS({v})" for n, v in compute.graph_output_to_symbolic_shape_dim().items()}
 
     [node.destroy() for node in eval_g.findAllNodes("prim::RaiseException")]
     torch._C._jit_pass_dce(eval_g)
@@ -128,6 +136,7 @@ def make_transformer():
     # gets clean graph
     return compute, eval_g, mapping, froze
 
+
 def make_dcgan():
     model = torch.hub.load("facebookresearch/pytorch_GAN_zoo:hub", "DCGAN")
     gnet = model.getNetD()
@@ -149,6 +158,7 @@ def make_unet():
     x = torch.rand((1, 3, 256, 256))
     y = torch.jit.trace(model, (x,))
     y.save(f"models/unet.pt")
+
 
 if __name__ == "__main__":
     make_transformer()

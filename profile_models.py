@@ -47,7 +47,7 @@ def analyze_model(model, x):
         g = torch._C._jit_trace_graph(model_frozen.graph, x)
         node_to_idx = {node: i for i, node in enumerate(g.nodes())}
         for node in g.nodes():
-            if node.kind() == "prim::Constant": continue
+            # if node.kind() == "prim::Constant": continue
             if node.kind() == "prim::NumToTensor": continue
             if node.kind() == "aten::slice": continue
             if node.kind() == "aten::expand": continue

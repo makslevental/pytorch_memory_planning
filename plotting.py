@@ -272,19 +272,24 @@ def plot_mem_usage(mem_usage, title, normalizer_name="mip", logy=False, last_one
         f"/home/mlevental/dev_projects/pytorch_dev/memory_allocator/benchmarks/{title.replace(' ', '_')}.svg"
     )
 
-sns.set(rc={'figure.figsize':(20, 10)})
+# sns.set(rc={'figure.figsize':(20, 10)})
 
 def plot_results(fp):
     df = pd.read_csv(fp)
     piv = df.pivot(index='model', columns='strategy', values='size')
     piv /= 2**20
-    ax = sns.barplot(x="model", y="size", hue="strategy", data=df)
+    # piv.drop(["Bump Allocator"], axis=1, inplace=True)
+    # ax = sns.barplot(x="model", y="size", hue="strategy", data=df)
+    # ax = sns.barplot(x=piv.index, y="size", hue="strategy", data=piv)
+    ax = piv.plot.bar(rot=70, figsize=(10,7))
     ax.set_ylabel("Size (MB)", fontsize=18)
     ax.set_xlabel("Model", labelpad=15, fontsize=18)
     leg = ax.legend()
     leg.set_title('Strategy', prop={'size': 14})
-    # ax = sns.barplot(x=piv.index, y="size", hue="strategy", data=piv)
-    # ax = piv.plot.bar(rot=70, figsize=(20,10))
-    ax.set_yscale("log")
+    # ax.set_yscale("log")
     plt.tight_layout()
-    plt.savefig("memory_bench.pdf")
+    plt.show()
+    # plt.savefig("memory_bench.pdf")
+
+if __name__ == "__main__":
+    plot_results("res.csv")
