@@ -4,9 +4,11 @@ import numpy as np
 import torch
 from torch._C._autograd import ProfilerActivity
 from torch.profiler import profile
-# from torch.utils import cpp_extension
 
 from strategies import LiveRange, MemEvent, RequiredAlloc
+
+
+# from torch.utils import cpp_extension
 
 
 def register_op():
@@ -26,10 +28,10 @@ def register_op():
 
 def profile_model(model, x, trace_f_name):
     with profile(
-            activities=[ProfilerActivity.CPU],
-            profile_memory=True,
-            record_shapes=True,
-            with_stack=True,
+        activities=[ProfilerActivity.CPU],
+        profile_memory=True,
+        record_shapes=True,
+        with_stack=True,
     ) as prof:
         with torch.no_grad():
             model(x)
@@ -40,22 +42,29 @@ def profile_model(model, x, trace_f_name):
 def analyze_model(model, x):
     if not isinstance(x, tuple):
         x = (x,)
+    # model_frozen = torch.jit.freeze(torch.jit.trace(model.eval(), x, strict=False))
     model_frozen = torch.jit.freeze(torch.jit.script(model.eval()))
-    model_frozen.graph.eraseInput(0)
+    print(model_frozen.inlined_graph)
+    # model_frozen.graph.eraseInput(0)
     live_ranges = []
     with torch.jit._hide_source_ranges():
         g = torch._C._jit_trace_graph(model_frozen.graph, x)
         node_to_idx = {node: i for i, node in enumerate(g.nodes())}
         for node in g.nodes():
             # if node.kind() == "prim::Constant": continue
-            if node.kind() == "prim::NumToTensor": continue
-            if node.kind() == "aten::slice": continue
-            if node.kind() == "aten::expand": continue
-            if node.kind() == "aten::unsqueeze": continue
+            if node.kind() == "prim::NumToTensor":
+                continue
+            if node.kind() == "aten::slice":
+                continue
+            if node.kind() == "aten::expand":
+                continue
+            if node.kind() == "aten::unsqueeze":
+                continue
             users = [u.user.kind() for u in node.output().uses()]
-            if "prim::Return" in users: continue
+            if "prim::Return" in users:
+                continue
 
-            if node.output().type().kind() == 'TensorType':
+            if len(node.outputs()) == 1 and node.output().type().kind() == "TensorType":
                 sizes = node.output().type().symbolic_sizes()
                 type = node.output().type().str().split("(")[0]
                 if type != "Float":
@@ -67,25 +76,21 @@ def analyze_model(model, x):
                     end = max(end, idx)
 
                 live_ranges.append(
-                    RequiredAlloc(LiveRange(start, end), int(np.prod(sizes))*4, node.output().debugName())
+                    RequiredAlloc(
+                        LiveRange(start, end),
+                        int(np.prod(sizes)) * 4,
+                        node.output().debugName(),
+                    )
                 )
+            else:
+                print(node)
+                raise Exception
     mem_events = []
     for lvr in live_ranges:
-        mem_events.append(
-            MemEvent(
-                lvr.ptr_addr,
-                lvr.size,
-                lvr.lvr.begin
-            )
-        )
-        mem_events.append(
-            MemEvent(
-                lvr.ptr_addr,
-                -lvr.size,
-                lvr.lvr.end+1
-            )
-        )
+        mem_events.append(MemEvent(lvr.ptr_addr, lvr.size, lvr.lvr.begin))
+        mem_events.append(MemEvent(lvr.ptr_addr, -lvr.size, lvr.lvr.end + 1))
     return live_ranges, mem_events
+
 
 def load_model(fp):
     model = torch.jit.load(fp)
@@ -130,9 +135,7 @@ def get_required_mem_allocs(trace_json):
 
 if __name__ == "__main__":
     # make_resnets()
-    model = load_model(
-        "models/resnet18.pt"
-    )
+    model = load_model("models/resnet18.pt")
     # profile_model(model, torch.rand((1, 3, 100, 100)), "resnet18.1x3x100x100")
     # profile_model(model, torch.rand((1, 3, 200, 100)), "resnet18.1x3x200x100")
     profile_model(model, torch.rand((1, 3, 100, 200)), "resnet18.1x3x100x200")

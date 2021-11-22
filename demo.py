@@ -68,7 +68,7 @@ def plot_tensor_runs(fp):
     df = pd.read_csv(fp, delim_whitespace=True, header=None)
     dfs = []
     for i in range(1, 7):
-        _df = df[i * 10 - 9: i * 10]
+        _df = df[i * 10 - 9 : i * 10]
         _df = _df.set_index(1)
         _df = _df.rename(columns={0: i})
         dfs.append(_df)
@@ -108,7 +108,7 @@ def read_fusion(fp):
     df = pd.read_csv(fp, delim_whitespace=True, header=None)
     dfs = []
     for i in range(1, 10):
-        _df = df[(i - 1) * 10: i * 10]
+        _df = df[(i - 1) * 10 : i * 10]
         _df = _df.set_index(1)
         _df = _df.rename(columns={0: i})
         dfs.append(_df)
@@ -123,7 +123,7 @@ def read_fusion(fp):
             "cpu-migrations",
             "stalled-cycles-frontend",
             "stalled-cycles-backend",
-            "branch-misses"
+            "branch-misses",
         ],
         inplace=True,
     )
@@ -150,6 +150,7 @@ def plot_fused_runs(_fp):
     plt.savefig(f"nonfused_over_fused.svg")
     plt.savefig(f"nonfused_over_fused.pdf")
 
+
 def plot_torchfused_runs(_fp):
     non_fused = read_fusion("mine_nonfused.out")
     fused = read_fusion("torch_nonfused.out")
@@ -170,21 +171,22 @@ def plot_torchfused_runs(_fp):
     plt.savefig(f"torch_nonfused_over_fused.svg")
     plt.savefig(f"torch_nonfused_over_fused.pdf")
 
+
 def plot_slots():
     slots = list(map(float, open("slots.out").readlines()))
     no_slots = list(map(float, open("no_slots.out").readlines()))
-    df = pd.DataFrame({
-        "slots": slots[:6],
-        "no slots": no_slots[:6],
-    })
+    df = pd.DataFrame(
+        {
+            "slots": slots[:6],
+            "no slots": no_slots[:6],
+        }
+    )
     df.plot()
     ax = plt.gca()
     ax.set_yscale("log")
     plt.legend()
     plt.show()
 
-
-import torch
 
 if __name__ == "__main__":
     # t1 = torch.arange(0, NUM_ELEMENTS)

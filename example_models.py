@@ -1,8 +1,8 @@
+import inspect
+
 import torch
-# from torchvision import models
-# from torchvision.models.segmentation import deeplabv3_resnet50
 from torchvision import models
-from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_resnet101
+from torchvision.models.segmentation import deeplabv3_resnet101
 from transformers import BertTokenizer, BertModel, BertConfig
 
 
@@ -102,9 +102,14 @@ def make_transformer():
 
     torch._C._jit_pass_propagate_shapes_on_graph(froze.graph)
     torch._C._jit_pass_canonicalize_for_shape_analysis(froze.graph)
-    compute = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(froze.graph)
+    compute = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(
+        froze.graph
+    )
     eval_g = compute.partial_eval_shape_graph()
-    mapping = {"%" + n.debugName(): f"SS({v})" for n, v in compute.graph_output_to_symbolic_shape_dim().items()}
+    mapping = {
+        "%" + n.debugName(): f"SS({v})"
+        for n, v in compute.graph_output_to_symbolic_shape_dim().items()
+    }
 
     [node.destroy() for node in eval_g.findAllNodes("prim::RaiseException")]
     torch._C._jit_pass_dce(eval_g)
@@ -160,5 +165,17 @@ def make_unet():
     y.save(f"models/unet.pt")
 
 
+def vision_models():
+    detection_models = models.detection
+    segmentation_models = models.segmentation
+    # for name, model in inspect.getmembers(models, inspect.isfunction):
+    #     yield name, model(pretrained=False)
+    for name, model in inspect.getmembers(detection_models, inspect.isfunction):
+        yield name, model(pretrained=False)
+    for name, model in inspect.getmembers(segmentation_models, inspect.isfunction):
+        yield name, model(pretrained=False)
+
+
 if __name__ == "__main__":
-    make_transformer()
+    # make_transformer()
+    vision_models()

@@ -6,7 +6,6 @@ from torch import nn
 from wolframclient.evaluation import WolframLanguageSession
 from wolframclient.language import wlexpr, wl
 
-
 # logging.basicConfig()
 # logging.getLogger().setLevel(logging.DEBUG)
 # logging.getLogger('foo').debug('bah')
@@ -14,7 +13,7 @@ from example_models import make_transformer
 
 
 def get_symbolic_dim_names(
-        frozen_model, inp_shapes: List[List[int]], simplified, sym_shape_to_val_debug_name
+    frozen_model, inp_shapes: List[List[int]], simplified, sym_shape_to_val_debug_name
 ):
     mod_inputs = list(frozen_model.graph.inputs())
     if len(mod_inputs) == len(inp_shapes):
@@ -33,7 +32,7 @@ def get_symbolic_dim_names(
             #     # if s < 0
             # ]
             sym_sizes = [
-                  (simplified[f"SS({s})"] if s < 0 else str(s))
+                (simplified[f"SS({s})"] if s < 0 else str(s))
                 for s in n.output().type().symbolic_sizes()
                 # if s < 0
             ]
@@ -185,6 +184,7 @@ def eval_backtrace_symbolic_outputs(op_shape_graph):
         res = list(res.values())[0]
     return res
 
+
 def eval_backtrace_symbolic_outputs_latex(op_shape_graph):
     def dfs(inp):
         val_name = inp.debugName()
@@ -249,7 +249,6 @@ def eval_backtrace_symbolic_outputs_latex(op_shape_graph):
     return res
 
 
-
 def get_shape_compute_graph(model, inp_shapes: List[List[int]]):
     frozen_model = torch.jit.freeze(torch.jit.script(model.eval()))
     if model._get_name() == "Inception3":
@@ -304,8 +303,15 @@ def check_non_negative(array: List[int]) -> bool:
     return non_negative
 
 
-def check_shape_forward(input: List[int], weight_sizes: List[int], bias: Optional[List[int]], stride: List[int],
-                        padding: List[int], dilation: List[int], groups: int):
+def check_shape_forward(
+    input: List[int],
+    weight_sizes: List[int],
+    bias: Optional[List[int]],
+    stride: List[int],
+    padding: List[int],
+    dilation: List[int],
+    groups: int,
+):
     k = len(input)
     weight_dim = len(weight_sizes)
 
@@ -322,7 +328,8 @@ def check_shape_forward(input: List[int], weight_sizes: List[int], bias: Optiona
 
     for i in range(k, k):
         assert (input[i] + 2 * padding[i - 2]) >= (
-                dilation[i - 2] * (weight_sizes[i] - 1) + 1), "kernel size can't be bigger than input size"
+            dilation[i - 2] * (weight_sizes[i] - 1) + 1
+        ), "kernel size can't be bigger than input size"
 
 
 # graph(%self : __torch__.torchvision.models.inception.___torch_mangle_103.Inception3,
@@ -347,9 +354,18 @@ def check_shape_forward(input: List[int], weight_sizes: List[int], bias: Optiona
 #   %x.46 : Tensor(SS(-25), 32, SS(-29), SS(-30)) = aten::conv2d(%x.1, %self.Conv2d_1a_3x3.conv.weight_fused_bn, %self.Conv2d_1a_3x3.conv.bias_fused_bn.1, %4151, %4152, %4153, %15) # /home/mlevental/dev_projects/pytorch_19/torch/nn/modules/conv.py:443:15
 
 # this is not handling transposed convolution yet
-def conv_output_size(input_size: List[int], weight_size: List[int], bias: Optional[List[int]], stride: List[int],
-                     padding: List[int], dilation: List[int], groups: int):
-    check_shape_forward(input_size, weight_size, bias, stride, padding, dilation, groups)
+def conv_output_size(
+    input_size: List[int],
+    weight_size: List[int],
+    bias: Optional[List[int]],
+    stride: List[int],
+    padding: List[int],
+    dilation: List[int],
+    groups: int,
+):
+    check_shape_forward(
+        input_size, weight_size, bias, stride, padding, dilation, groups
+    )
 
     has_dilation = len(dilation) > 0
     dim = len(input_size)
@@ -365,9 +381,13 @@ def conv_output_size(input_size: List[int], weight_size: List[int], bias: Option
         # most common case of just enough padding to fit kernel and stride evenly
         # paves the input
         if (input_size[d] + (2 * padding[d - 2]) - (kernel - 1)) % stride[d - 2] == 0:
-            append_value = int((input_size[d] + (2 * padding[d - 2]) - (kernel - 1)) / stride[d - 2])
+            append_value = int(
+                (input_size[d] + (2 * padding[d - 2]) - (kernel - 1)) / stride[d - 2]
+            )
         else:
-            append_value = ((input_size[d] + (2 * padding[d - 2]) - (kernel - 1)) // stride[d - 2])
+            append_value = (
+                input_size[d] + (2 * padding[d - 2]) - (kernel - 1)
+            ) // stride[d - 2]
         output_size.append(append_value)
 
     return output_size
@@ -408,7 +428,11 @@ def get_shape_compute_elias(model, inp_shapes: List[List[int]]):
 
     inps = list(model_frozen.graph.inputs())
     inps[1].setType(inps[1].type().with_sizes([None, None, None, None]))
-    shape_compute_graph = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(model_frozen.graph)
+    shape_compute_graph = (
+        torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(
+            model_frozen.graph
+        )
+    )
     g = shape_compute_graph.partial_eval_shape_graph()
 
     # here is the encoding of shape arithmetic from the input, represnted as TS graph
@@ -513,6 +537,7 @@ def register_op():
     #
     # print(torch.ops.my_ops.my_upsample_bilinear2d)
 
+
 def translate(text, conversion_dict, before=None):
     """
     Translate words from a text using a conversion dictionary
@@ -524,7 +549,8 @@ def translate(text, conversion_dict, before=None):
         (by default it will to a lowercase)
     """
     # if empty:
-    if not text: return text
+    if not text:
+        return text
     # preliminary transformation:
     # before = before or str.lower
     t = text
@@ -532,8 +558,8 @@ def translate(text, conversion_dict, before=None):
         t = t.replace(key, value)
     return t
 
+
 # register_op()
-import torchvision
 
 if __name__ == "__main__":
     torch._C._jit_set_symbolic_shapes_test_mode(True)
@@ -548,7 +574,7 @@ if __name__ == "__main__":
     # model = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
     #     in_channels=3, out_channels=1, init_features=32, pretrained=True)
     # model = torch.hub.load('facebookresearch/pytorch_GAN_zoo:hub', 'DCGAN').netD
-    model = torch.hub.load('pytorch/vision:v0.10.0', 'deeplabv3_resnet50')
+    model = torch.hub.load("pytorch/vision:v0.10.0", "deeplabv3_resnet50")
     # print(model)
     model.eval()
     out = model(torch.randn(1, 3, 128, 128))
@@ -576,75 +602,75 @@ if __name__ == "__main__":
     sym_shape_to_index = {}
     sym_shape_to_val_debug_name = {}
     for index, output in enumerate(list(g.outputs())[0].node().inputs()):
-        d = output_sym_map["%"+output.debugName()]
+        d = output_sym_map["%" + output.debugName()]
         sym_shape_to_index[d] = index
         sym_shape_to_val_debug_name[f"SS({d})"] = f"%{output.debugName()}"
 
     print("sym_shape_to_val_debug_name")
     print(sym_shape_to_val_debug_name)
 
-
-
     greek_alphabet = [
-        r'|$\alpha$|',
-        r'|$\beta$|',
-        r'|$\gamma$|',
-        r'|$\delta$|',
-        r'|$\epsilon$|',
-        r'|$\zeta$|',
-        r'|$\eta$|',
-        r'|$\theta$|',
-        r'|$\iota$|',
-        r'|$\kappa$|',
-        r'|$\lambda$|',
-        r'|$\mu$|',
-        r'|$\nu$|',
-        r'|$\xi$|',
-        r'|$\omicron$|',
-        r'|$\pi$|',
-        r'|$\rho$|',
-        r'|$\sigma$|',
-        r'|$\tau$|',
-        r'|$\upsilon$|',
-        r'|$\phi$|',
-        r'|$\chi$|',
-        r'|$\psi$|',
-        r'|$\omega$|',
+        r"|$\alpha$|",
+        r"|$\beta$|",
+        r"|$\gamma$|",
+        r"|$\delta$|",
+        r"|$\epsilon$|",
+        r"|$\zeta$|",
+        r"|$\eta$|",
+        r"|$\theta$|",
+        r"|$\iota$|",
+        r"|$\kappa$|",
+        r"|$\lambda$|",
+        r"|$\mu$|",
+        r"|$\nu$|",
+        r"|$\xi$|",
+        r"|$\omicron$|",
+        r"|$\pi$|",
+        r"|$\rho$|",
+        r"|$\sigma$|",
+        r"|$\tau$|",
+        r"|$\upsilon$|",
+        r"|$\phi$|",
+        r"|$\chi$|",
+        r"|$\psi$|",
+        r"|$\omega$|",
     ]
     greek_alphabet = [
-        r'\alpha',
-        r'\beta',
-        r'\gamma',
-        r'\delta',
-        r'\epsilon',
-        r'\zeta',
-        r'\eta',
-        r'\theta',
-        r'\iota',
-        r'\kappa',
-        r'\lambda',
-        r'\mu',
-        r'\nu',
-        r'\xi',
-        r'\omicron',
-        r'\pi',
-        r'\rho',
-        r'\sigma',
-        r'\tau',
-        r'\upsilon',
-        r'\phi',
-        r'\chi',
-        r'\psi',
-        r'\omega',
+        r"\alpha",
+        r"\beta",
+        r"\gamma",
+        r"\delta",
+        r"\epsilon",
+        r"\zeta",
+        r"\eta",
+        r"\theta",
+        r"\iota",
+        r"\kappa",
+        r"\lambda",
+        r"\mu",
+        r"\nu",
+        r"\xi",
+        r"\omicron",
+        r"\pi",
+        r"\rho",
+        r"\sigma",
+        r"\tau",
+        r"\upsilon",
+        r"\phi",
+        r"\chi",
+        r"\psi",
+        r"\omega",
     ]
     greeks_to_idx = {g: i for i, g in enumerate(greek_alphabet)}
     idx_to_greeks = {i: g for i, g in enumerate(greek_alphabet)}
 
     input_syms = list(frozen_model.graph.inputs())[1].type().symbolic_sizes()
 
-    sym_to_greeks = {f"SS({v})": idx_to_greeks[i] for i,v in enumerate(input_syms)}
+    sym_to_greeks = {f"SS({v})": idx_to_greeks[i] for i, v in enumerate(input_syms)}
     convs_to_greeks = {}
-    for i, (sym, conv) in enumerate(sym_shape_to_val_debug_name.items(), start=len(input_syms)):
+    for i, (sym, conv) in enumerate(
+        sym_shape_to_val_debug_name.items(), start=len(input_syms)
+    ):
         sym_to_greeks[sym] = idx_to_greeks[i]
         convs_to_greeks[conv] = idx_to_greeks[i]
 
@@ -657,21 +683,25 @@ if __name__ == "__main__":
         "self.2[0]": "a",
         "self.2[1]": "b",
     }
-    ress = {k: translate(v, ss_map) for k,v in res.items()}
+    ress = {k: translate(v, ss_map) for k, v in res.items()}
     # print()
     print("orig:")
     # print()
     # pprint(ress)
     simplified = {}
     with WolframLanguageSession(
-            kernel="/opt/Wolfram/WolframEngine/12.3/Executables/WolframKernel",
-            # kernel_loglevel=logging.DEBUG,
-            initfile="/home/mlevental/dev_projects/pytorch_memory_planning/initkernel.m",
+        kernel="/opt/Wolfram/WolframEngine/12.3/Executables/WolframKernel",
+        # kernel_loglevel=logging.DEBUG,
+        initfile="/home/mlevental/dev_projects/pytorch_memory_planning/initkernel.m",
     ) as session:
         WEval = session.evaluate
         for k, v in ress.items():
             if isinstance(v, str) and len(v) > 0:
-                simplified[translate("%"+k, convs_to_greeks)] = map_str_to_mathematica(v, [f"Mod[{rep}, 32] == 0, {rep} > 0" for rep in ss_map.values()])
+                simplified[
+                    translate("%" + k, convs_to_greeks)
+                ] = map_str_to_mathematica(
+                    v, [f"Mod[{rep}, 32] == 0, {rep} > 0" for rep in ss_map.values()]
+                )
     print()
     print("simplified:")
     for k, v in simplified.items():

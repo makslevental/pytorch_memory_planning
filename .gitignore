@@ -141,3 +141,4 @@ cython_debug/
 memory_maps
 models
 traces
+planned_allocs
