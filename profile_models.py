@@ -1,4 +1,5 @@
 import argparse
+import ctypes
 import json
 import os
 import re
@@ -202,6 +203,7 @@ def dump_req_mem_allocs(reqs: List[RequiredAlloc], name):
 
 
 if __name__ == "__main__":
+    sh_obj = ctypes.cdll.LoadLibrary("/home/mlevental/dev_projects/pytorch_memory_planning/cpp_src/cmake-build-debug/runtime_patch/libruntime_patch.so")
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("name", type=str)
     args = parser.parse_args()
@@ -211,7 +213,7 @@ if __name__ == "__main__":
     x = torch.rand((1, 3, 244, 244))
     # y = torch.jit.trace(model, (x,), strict=False)
     # y.save(f"models/{name}.pt")
-    # profile_model(model, x, name)
+    profile_model(model, x, name)
     # req_mem_allocs, mem_events = get_reqs_from_trace(name)
-    req_mem_allocs, mem_events = analyze_model(model, x)
-    dump_req_mem_allocs(req_mem_allocs, name)
+    # req_mem_allocs, mem_events = analyze_model(model, x)
+    # dump_req_mem_allocs(req_mem_allocs, name)

@@ -15,19 +15,19 @@ def get_cmap(n, name="spring"):
 
 
 def add_envelope_to_memory_map(
-    fig,
-    ax,
-    x_min,
-    _x_max,
-    _y_min,
-    _y_max,
-    allocations: List[PlannedAlloc],
-    title,
-    *,
-    shade=True,
-    save=True,
-    fp_dir=os.getcwd() + "/memory_maps",
-    rescale_to_mb=True,
+        fig,
+        ax,
+        x_min,
+        _x_max,
+        _y_min,
+        _y_max,
+        allocations: List[PlannedAlloc],
+        title,
+        *,
+        shade=True,
+        save=True,
+        fp_dir=os.getcwd() + "/memory_maps",
+        rescale_to_mb=True,
 ):
     envelope_x = []
     envelope_y = []
@@ -41,8 +41,8 @@ def add_envelope_to_memory_map(
         )
 
         if offset + size > max(
-            [allo.mem_region.offset + allo.mem_region.size for allo in allocations[i:]],
-            default=float("inf"),
+                [allo.mem_region.offset + allo.mem_region.size for allo in allocations[i:]],
+                default=float("inf"),
         ):
             envelope_x.append(end)
             if rescale_to_mb:
@@ -88,12 +88,12 @@ def add_envelope_to_memory_map(
 
 
 def _make_memory_map(
-    allocations: List[PlannedAlloc],
-    title,
-    *,
-    save=True,
-    fp_dir=os.getcwd() + "/memory_maps",
-    rescale_to_mb=True,
+        allocations: List[PlannedAlloc],
+        title,
+        *,
+        save=True,
+        fp_dir=os.getcwd() + "/memory_maps",
+        rescale_to_mb=True,
 ):
     fig, ax = plt.subplots(figsize=(50, 10))
 
@@ -155,13 +155,13 @@ def _make_memory_map(
 
 
 def make_memory_map(
-    allocations: List[PlannedAlloc],
-    title,
-    *,
-    save=True,
-    fp_dir=os.getcwd() + "/memory_maps",
-    rescale_to_mb=True,
-    add_envelope=False,
+        allocations: List[PlannedAlloc],
+        title,
+        *,
+        save=True,
+        fp_dir=os.getcwd() + "/memory_maps",
+        rescale_to_mb=True,
+        add_envelope=False,
 ):
     fig, ax, x_min, x_max, y_min, y_max = _make_memory_map(
         allocations, title, save=save, fp_dir=fp_dir, rescale_to_mb=rescale_to_mb
@@ -205,12 +205,12 @@ strat_colors = {
 
 
 def plot_mem_usage(
-    mem_usage,
-    title,
-    normalizer_name="mip",
-    logy=False,
-    last_one="linear_scan",
-    ylabel="% max mem",
+        mem_usage,
+        title,
+        normalizer_name="mip",
+        logy=False,
+        last_one="linear_scan",
+        ylabel="% max mem",
 ):
     strategies = set()
     for model, strats in mem_usage.items():
@@ -248,9 +248,9 @@ def plot_mem_usage(
             width,
             color=strat_colors[strat],
             label=strat.replace("profiled ", "")
-            .replace("static ", "")
-            .replace("_", " ")
-            .upper(),
+                .replace("static ", "")
+                .replace("_", " ")
+                .upper(),
         )
 
     # Add some text for labels, title and custom x-axis tick labels, etc.
@@ -400,19 +400,26 @@ def plot_results(fp):
     #
     # # plt.show()
     f.tight_layout()
-    f.savefig("memory_bench.pdf", title)
+    f.savefig("memory_bench.pdf")
     # f.show()
 
-def plot_jemalloc_heap_profile(fp, title):
+
+def plot_jemalloc_heap_profile(fp, model_name):
     df = pd.read_csv(fp)
     df /= 2 ** 20
     ax = df.plot(figsize=(12, 7))
     ax.set_xlabel("Model", labelpad=10, fontsize=24)
     ax.set_ylabel("MB", labelpad=10, fontsize=24)
-    ax.set_title(title, fontsize=24)
+    ax.set_title(f"{model_name} jemalloc stats", fontsize=24)
+    ax.legend(loc="upper right")
     plt.tight_layout()
-    plt.show()
+    plt.savefig(f"/home/mlevental/dev_projects/pytorch_memory_planning/jemalloc_plots/{model_name}.pdf")
+    plt.close()
+
 
 if __name__ == "__main__":
-    # plot_results("res.csv")
-    plot_jemalloc_heap_profile("/home/mlevental/dev_projects/pytorch_memory_planning/je_malloc_runs/resnet50/heap_profile.csv", "ResNet50 jemalloc stats")
+    runs_dir = "/home/mlevental/dev_projects/pytorch_memory_planning/je_malloc_runs/"
+    for path, directories, files in os.walk(runs_dir):
+        _, name = os.path.split(path)
+        if "heap_profile.csv" in set(files):
+            plot_jemalloc_heap_profile(f"{path}/heap_profile.csv", name)

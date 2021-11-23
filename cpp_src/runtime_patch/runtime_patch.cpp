@@ -1,13 +1,16 @@
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <elf.h>
 #include <iostream>
+#include <jemalloc/jemalloc.h>
 #include <link.h>
 #include <pybind11/embed.h>
 #include <sstream> //for std::stringstream
-#include <string>  //for std::string
+#include <stdexcept>
+#include <string> //for std::string
 #include <sys/auxv.h>
 #include <sys/mman.h>
 
@@ -36,6 +39,64 @@ static void (*realfree_cpu)(void *) = nullptr;
 /* My local versions of the alloc_cpu functions */
 static void *myalloc_cpu(size_t size);
 static void myfree_cpu(void *ptr);
+
+int64_t time_since_epoch() {
+  auto t = std::chrono::system_clock::now();
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             t.time_since_epoch())
+      .count();
+}
+
+static uint64_t epoch = 1;
+std::string get_stats() {
+  // Update the statistics cached by mallctl.
+  epoch += 1;
+  size_t sz;
+  sz = sizeof(epoch);
+  jemallctl("epoch", &epoch, &sz, &epoch, sz);
+
+  // Get basic allocation statistics.  Take care to check for
+  // errors, since --enable-stats must have been specified at
+  // build time for these statistics to be available.
+  size_t allocated, active, metadata, resident, mapped, retained;
+  std::ostringstream out;
+  sz = sizeof(size_t);
+  if (jemallctl("stats.allocated", &allocated, &sz, NULL, 0) == 0 &&
+      jemallctl("stats.active", &active, &sz, NULL, 0) == 0 &&
+      jemallctl("stats.metadata", &metadata, &sz, NULL, 0) == 0 &&
+      jemallctl("stats.resident", &resident, &sz, NULL, 0) == 0 &&
+      jemallctl("stats.mapped", &mapped, &sz, NULL, 0) == 0 &&
+      jemallctl("stats.retained", &retained, &sz, NULL, 0) == 0) {
+    //    sprintf(buffer,
+    //            "Current allocated/active/metadata/resident/mapped/retained: "
+    //            "%zu/%zu/%zu/%zu/%zu/%zu\n",
+    //            allocated, active, metadata, resident, mapped, retained);
+    out << allocated << "," << active << "," << metadata << "," << resident
+        << "," << mapped << "," << retained;
+  }
+  return out.str();
+}
+
+constexpr size_t gAlignment = 64;
+void *jemellac_alloc_cpu(size_t nbytes) {
+  if (nbytes == 0) {
+    return nullptr;
+  }
+
+  void *data;
+  int err = jeposix_memalign(&data, gAlignment, nbytes);
+  if (err != 0) {
+    throw std::invalid_argument("ran out of memory");
+  }
+  std::cout << "alloc," << time_since_epoch() << "," << data << "," << get_stats() << std::endl;
+
+  return data;
+}
+
+void jemalloc_free_cpu(void *data) {
+  jefree(data);
+  std::cout << "free," << time_since_epoch() << "," << data << "," << get_stats() << std::endl;
+}
 
 /*************/
 /* ELF stuff */
@@ -141,18 +202,20 @@ static void patch_got(ElfW(Addr) base, const ElfW(Phdr) * phdr, int16_t phnum,
       get_got_entry(base, jmprel, symtab, strtab, "_ZN3c108free_cpuEPv"));
 
   if (alloc_cpugot != nullptr) {
-    printf("found alloc_cpu\n");
+//    printf("found alloc_cpu\n");
     void *page = (void *)((intptr_t)alloc_cpugot & ~(0x1000 - 1));
     mprotect(page, 0x1000, PROT_READ | PROT_WRITE);
     realalloc_cpu = *alloc_cpugot;
-    *alloc_cpugot = myalloc_cpu;
+    //    *alloc_cpugot = myalloc_cpu;
+    *alloc_cpugot = jemellac_alloc_cpu;
   }
   if (free_cpugot != nullptr) {
-    printf("found free_cpu\n");
+//    printf("found free_cpu\n");
     void *page = (void *)((intptr_t)free_cpugot & ~(0x1000 - 1));
     mprotect(page, 0x1000, PROT_READ | PROT_WRITE);
     realfree_cpu = *free_cpugot;
-    *free_cpugot = myfree_cpu;
+    //    *free_cpugot = myfree_cpu;
+    *free_cpugot = jemalloc_free_cpu;
   }
 }
 
@@ -160,7 +223,7 @@ static int callback(struct dl_phdr_info *info, size_t size, void *data) {
   uint16_t phentsize;
 
   if (std::string(info->dlpi_name).find("libc10.so") != std::string::npos) {
-    printf("Patching GOT entry of \"%s\"\n", info->dlpi_name);
+//    printf("Patching GOT entry of \"%s\"\n", info->dlpi_name);
     phentsize = getauxval(AT_PHENT);
     patch_got(info->dlpi_addr, info->dlpi_phdr, info->dlpi_phnum, phentsize);
   }
@@ -181,19 +244,19 @@ PyObject *python_alloc_cpu_fn_ptr;
 PyObject *python_free_cpu_fn_ptr;
 
 __attribute__((constructor)) static void init() {
-  printf("initing\n");
+//  printf("initing\n");
   dl_iterate_phdr(callback, nullptr);
 
-  auto runtime_mod = py::module_::import("runtime").attr("__dict__").ptr();
-  auto runtime_mod_dict = py::reinterpret_borrow<py::dict>(runtime_mod);
-
-  assert(runtime_mod_dict.contains("alloc_cpu"));
-  python_alloc_cpu_fn_ptr = runtime_mod_dict["alloc_cpu"].ptr();
-
-  assert(runtime_mod_dict.contains("free_cpu"));
-  python_free_cpu_fn_ptr = runtime_mod_dict["free_cpu"].ptr();
-
-  std::cout << "Py_IsInitialized " << Py_IsInitialized() << "\n";
+  //  auto runtime_mod = py::module_::import("runtime").attr("__dict__").ptr();
+  //  auto runtime_mod_dict = py::reinterpret_borrow<py::dict>(runtime_mod);
+  //
+  //  assert(runtime_mod_dict.contains("alloc_cpu"));
+  //  python_alloc_cpu_fn_ptr = runtime_mod_dict["alloc_cpu"].ptr();
+  //
+  //  assert(runtime_mod_dict.contains("free_cpu"));
+  //  python_free_cpu_fn_ptr = runtime_mod_dict["free_cpu"].ptr();
+  //
+  //  std::cout << "Py_IsInitialized " << Py_IsInitialized() << "\n";
 
   atexit(fini);
 }

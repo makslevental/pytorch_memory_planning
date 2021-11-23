@@ -65,12 +65,20 @@ vgg19
 wide_resnet101_2
 wide_resnet50_2"
 for NAME in $names ; do
-  for j in {0..3} ; do
+  mkdir -p "je_malloc_runs/${NAME}/"
+#  echo python jemalloc_experiments.py $NAME --heap_profile
+  for j in {0..0} ; do
     NUM_LOOPS=$((10**j))
     for i in {0..6} ; do
       NUM_WORKERS=$((2**i))
-      python jemalloc_experiments.py $NAME --num_workers=$NUM_WORKERS --num_loops=$NUM_LOOPS;
-      jsonxf -i "je_malloc_runs/${NAME}/${NUM_WORKERS}_${NUM_LOOPS}.json" -o "je_malloc_runs/${NAME}/${NUM_WORKERS}_${NUM_LOOPS}.json"
+      echo "${NAME} ${NUM_WORKERS}"
+      NARENAS=$NUM_WORKERS
+      JEMALLOC_CONF="narenas:${NARENAS}" python jemalloc_experiments.py $NAME --narenas $NARENAS --num_workers=$NUM_WORKERS --num_loops=$NUM_LOOPS > "je_malloc_runs/${NAME}/heap_profile_${NARENAS}_${NUM_WORKERS}_${NUM_LOOPS}.csv"
+      jsonxf -i "je_malloc_runs/${NAME}/${NARENAS}_${NUM_WORKERS}_${NUM_LOOPS}.json" -o "je_malloc_runs/${NAME}/${NARENAS}_${NUM_WORKERS}_${NUM_LOOPS}.json"
+
+      NARENAS=1
+      JEMALLOC_CONF="narenas:${NARENAS}" python jemalloc_experiments.py $NAME --narenas $NARENAS --num_workers=$NUM_WORKERS --num_loops=$NUM_LOOPS > "je_malloc_runs/${NAME}/heap_profile_${NARENAS}_${NUM_WORKERS}_${NUM_LOOPS}.csv"
+      jsonxf -i "je_malloc_runs/${NAME}/${NARENAS}_${NUM_WORKERS}_${NUM_LOOPS}.json" -o "je_malloc_runs/${NAME}/${NARENAS}_${NUM_WORKERS}_${NUM_LOOPS}.json"
     done
   done
 done
