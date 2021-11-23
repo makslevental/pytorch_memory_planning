@@ -124,7 +124,7 @@ if __name__ == "__main__":
     for dir in ["models", "memory_maps", "traces"]:
         if not os.path.isdir(dir):
             os.mkdir(dir)
-    # sh_obj = ctypes.cdll.LoadLibrary("runtime_patch/libruntime_patch.so")
+    # sh_obj = ctypes.cdll.LoadLibrary("cpp_src/libruntime_patch.so")
 
     # with open('res.csv', 'w') as f:
     #     with redirect_stdout(f):

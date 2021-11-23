@@ -400,9 +400,19 @@ def plot_results(fp):
     #
     # # plt.show()
     f.tight_layout()
-    f.savefig("memory_bench.pdf")
+    f.savefig("memory_bench.pdf", title)
     # f.show()
 
+def plot_jemalloc_heap_profile(fp, title):
+    df = pd.read_csv(fp)
+    df /= 2 ** 20
+    ax = df.plot(figsize=(12, 7))
+    ax.set_xlabel("Model", labelpad=10, fontsize=24)
+    ax.set_ylabel("MB", labelpad=10, fontsize=24)
+    ax.set_title(title, fontsize=24)
+    plt.tight_layout()
+    plt.show()
 
 if __name__ == "__main__":
-    plot_results("res.csv")
+    # plot_results("res.csv")
+    plot_jemalloc_heap_profile("/home/mlevental/dev_projects/pytorch_memory_planning/je_malloc_runs/resnet50/heap_profile.csv", "ResNet50 jemalloc stats")

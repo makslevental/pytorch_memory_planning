@@ -165,17 +165,18 @@ def make_unet():
     y.save(f"models/unet.pt")
 
 
-def vision_models():
+def vision_models(name):
+    modelss = dict(inspect.getmembers(models, inspect.isfunction))
     detection_models = models.detection
     segmentation_models = models.segmentation
-    # for name, model in inspect.getmembers(models, inspect.isfunction):
-    #     yield name, model(pretrained=False)
-    for name, model in inspect.getmembers(detection_models, inspect.isfunction):
-        yield name, model(pretrained=False)
-    for name, model in inspect.getmembers(segmentation_models, inspect.isfunction):
-        yield name, model(pretrained=False)
-
+    modelss.update(
+        dict(inspect.getmembers(detection_models, inspect.isfunction))
+    )
+    modelss.update(
+        dict(inspect.getmembers(segmentation_models, inspect.isfunction))
+    )
+    return modelss[name](pretrained=False)
 
 if __name__ == "__main__":
     # make_transformer()
-    vision_models()
+    vision_models("alexnet")

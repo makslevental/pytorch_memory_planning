@@ -41,7 +41,7 @@ def overlap(a, b, c, d):
     interval_len_2 = d - c
 
     if not valid_add(interval_len_1, interval_len_2) or not valid_sub(
-        outer_len, interval_len_1 + interval_len_2
+            outer_len, interval_len_1 + interval_len_2
     ):
         return True
     else:
@@ -108,7 +108,10 @@ class RequiredAlloc:
     ptr_addr: str
 
     def __str__(self):
-        return f"{self.lvr}:{self.size}"
+        return f"{self.lvr}:({self.size}, '{self.ptr_addr}')"
+
+    def __repr__(self):
+        return str(self)
 
     def __hash__(self):
         return int(hashlib.sha256(str(self).encode("utf-8")).hexdigest(), 16) % 10 ** 8
@@ -139,11 +142,11 @@ class GapPriority(Enum):
 
 
 def find_gap(
-    record: RequiredAlloc,
-    current_allocs: Dict[str, PlannedAlloc],
-    interval_tree: NCLS,
-    *,
-    GAP_PRIORITY: GapPriority = GapPriority.SMALLEST,
+        record: RequiredAlloc,
+        current_allocs: Dict[str, PlannedAlloc],
+        interval_tree: NCLS,
+        *,
+        GAP_PRIORITY: GapPriority = GapPriority.SMALLEST,
 ):
     best_gap = float("inf")
     best_offset = None
@@ -174,8 +177,8 @@ def find_gap(
 
 
 def _greedy_by_size(
-    sorted_req_mem_allocs: List[RequiredAlloc],
-    gap_finder,
+        sorted_req_mem_allocs: List[RequiredAlloc],
+        gap_finder,
 ):
     current_allocs: Dict[str, PlannedAlloc] = {}
     interval_tree = IntervalTree.from_tuples(
@@ -193,9 +196,9 @@ def _greedy_by_size(
 
 
 def greedy_by_size(
-    req_mem_allocs: List[RequiredAlloc],
-    *,
-    gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
+        req_mem_allocs: List[RequiredAlloc],
+        *,
+        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
 ):
     print("greedy by size", file=sys.stderr)
     # biggest size first but break ties deterministically
@@ -204,9 +207,9 @@ def greedy_by_size(
 
 
 def greedy_by_longest(
-    req_mem_allocs: List[RequiredAlloc],
-    *,
-    gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
+        req_mem_allocs: List[RequiredAlloc],
+        *,
+        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
 ):
     print("greedy by longest", file=sys.stderr)
     req_mem_allocs.sort(key=lambda r: (len(r.lvr), r.lvr), reverse=True)
@@ -220,6 +223,22 @@ def save_planned_allocs(allocs: List[PlannedAlloc], name):
 
 
 MemEvent = namedtuple("MemEvent", "ptr_addr size ts")
+
+
+@dataclass
+class MemEvent:
+    ptr_addr: str
+    size: int
+    ts: int
+
+    # def __str__(self):
+    #     return f"{self.ts}:{self.size}"
+    #
+    # def __repr__(self):
+    #     return str(self)
+
+    def __hash__(self):
+        return int(hashlib.sha256(str(self).encode("utf-8")).hexdigest(), 16) % 10 ** 8
 
 
 def solve_z3():
@@ -538,7 +557,7 @@ def solve_mip(required_allocs: List[RequiredAlloc]):
     # and z_ij = 1 if the converse offset_j + mem_j <= offset_i
     # (note there could be a gap if we stick a block in between them
     for i, r1 in enumerate(required_allocs):
-        for j, r2 in enumerate(required_allocs[i + 1 :], start=i + 1):
+        for j, r2 in enumerate(required_allocs[i + 1:], start=i + 1):
             if r1.lvr.overlap(r2.lvr):
                 inters = solver.IntVar(0.0, 1, f"inters_{{{i},{j}}}")
                 # if z_ij = 0 then i < j then offsets[i] + mems[i] <= offsets[j]
