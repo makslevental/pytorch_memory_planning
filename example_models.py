@@ -165,7 +165,7 @@ def make_unet():
     y.save(f"models/unet.pt")
 
 
-def vision_models(name):
+def _vision_models():
     modelss = dict(inspect.getmembers(models, inspect.isfunction))
     detection_models = models.detection
     segmentation_models = models.segmentation
@@ -175,8 +175,25 @@ def vision_models(name):
     modelss.update(
         dict(inspect.getmembers(segmentation_models, inspect.isfunction))
     )
-    return modelss[name](pretrained=False)
+    return modelss
+
+
+def vision_models(name):
+    return _vision_models()[name](pretrained=False)
+
+
+def make_all_vision_models():
+    modelss = _vision_models()
+    for name, model_fn in modelss.items():
+        print(name)
+        with torch.no_grad():
+            model = model_fn(pretrained=False).eval()
+            print(model)
+            x = torch.rand((1, 3, 52, 52))
+            y = torch.jit.trace(model, (x,), strict=False)
+
 
 if __name__ == "__main__":
     # make_transformer()
-    vision_models("alexnet")
+    # vision_models("alexnet")
+    make_all_vision_models()

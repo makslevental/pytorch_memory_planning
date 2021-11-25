@@ -13,8 +13,8 @@ target_compile_definitions(jemalloc_bindings
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(JEMALLOC REQUIRED jemalloc)
 pkg_search_module(JEMALLOC REQUIRED jemalloc)
+include_directories(${JEMALLOC_INCLUDE_DIRS})
 
 # make all connections for jemallc
-include_directories(${JEMALLOC_INCLUDE_DIRS})
 target_link_directories(jemalloc_bindings PRIVATE ${JEMALLOC_LIBRARY_DIRS})
 target_link_libraries(jemalloc_bindings PRIVATE ${JEMALLOC_LIBRARIES})

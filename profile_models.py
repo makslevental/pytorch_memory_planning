@@ -66,7 +66,7 @@ def analyze_model(model, x):
         graph.eraseInput(0)
 
     graph = torch._C._jit_trace_graph(graph, x)
-    torch._C._jit_optimize_graph(graph)
+    torch._C._jit_pass_optimize_frozen_graph(graph)
     for node in graph.findAllNodes("prim::RaiseException"):
         node.destroy()
     torch._C._jit_pass_dce(graph)

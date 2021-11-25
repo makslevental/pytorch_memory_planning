@@ -67,10 +67,6 @@ std::string get_stats() {
       jemallctl("stats.resident", &resident, &sz, NULL, 0) == 0 &&
       jemallctl("stats.mapped", &mapped, &sz, NULL, 0) == 0 &&
       jemallctl("stats.retained", &retained, &sz, NULL, 0) == 0) {
-    //    sprintf(buffer,
-    //            "Current allocated/active/metadata/resident/mapped/retained: "
-    //            "%zu/%zu/%zu/%zu/%zu/%zu\n",
-    //            allocated, active, metadata, resident, mapped, retained);
     out << allocated << "," << active << "," << metadata << "," << resident
         << "," << mapped << "," << retained;
   }
@@ -88,14 +84,19 @@ void *jemellac_alloc_cpu(size_t nbytes) {
   if (err != 0) {
     throw std::invalid_argument("ran out of memory");
   }
-  std::cout << "alloc," << time_since_epoch() << "," << data << "," << get_stats() << std::endl;
+  if(const char* env_p = std::getenv("PRINT_JEMALLOC_HEAP")) {
+    std::cout << "alloc," << time_since_epoch() << "," << data << "," << get_stats() << std::endl;
+  }
 
   return data;
 }
 
 void jemalloc_free_cpu(void *data) {
   jefree(data);
-  std::cout << "free," << time_since_epoch() << "," << data << "," << get_stats() << std::endl;
+  if(const char* env_p = std::getenv("PRINT_JEMALLOC_HEAP")) {
+    std::cout << "free," << time_since_epoch() << "," << data << ","
+              << get_stats() << std::endl;
+  }
 }
 
 /*************/
@@ -245,7 +246,7 @@ PyObject *python_free_cpu_fn_ptr;
 
 __attribute__((constructor)) static void init() {
 //  printf("initing\n");
-  dl_iterate_phdr(callback, nullptr);
+//  dl_iterate_phdr(callback, nullptr);
 
   //  auto runtime_mod = py::module_::import("runtime").attr("__dict__").ptr();
   //  auto runtime_mod_dict = py::reinterpret_borrow<py::dict>(runtime_mod);

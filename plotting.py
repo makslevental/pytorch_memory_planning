@@ -405,19 +405,23 @@ def plot_results(fp):
 
 
 def plot_jemalloc_heap_profile(fp, model_name):
-    df = pd.read_csv(fp)
-    df /= 2 ** 20
-    ax = df.plot(figsize=(12, 7))
+    df = pd.read_csv(fp, names="type,ts,ptr,allocated,active,metadata,resident,mapped,retained".split(","))
+    df["allocated,active,metadata,resident,mapped,retained".split(",")] /= 2 ** 20
+    ax = df["allocated,active,metadata,resident,mapped,retained".split(",")].plot(figsize=(12, 7))
     ax.set_xlabel("Model", labelpad=10, fontsize=24)
     ax.set_ylabel("MB", labelpad=10, fontsize=24)
     ax.set_title(f"{model_name} jemalloc stats", fontsize=24)
-    ax.legend(loc="upper right")
+    ax.legend(loc="upper left")
     plt.tight_layout()
     plt.savefig(f"/home/mlevental/dev_projects/pytorch_memory_planning/jemalloc_plots/{model_name}.pdf")
     plt.close()
 
 
 if __name__ == "__main__":
+    df = pd.read_csv("/home/mlevental/dev_projects/pytorch_memory_planning/je_malloc_runs/res.csv", names=["model", "normal", "uptime_ns"])
+    piv = df.pivot(index="model", columns="normal", values="uptime_ns")
+    piv = piv.dropna()
+    print(df)
     runs_dir = "/home/mlevental/dev_projects/pytorch_memory_planning/je_malloc_runs/"
     for path, directories, files in os.walk(runs_dir):
         _, name = os.path.split(path)
