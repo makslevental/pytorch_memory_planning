@@ -83,7 +83,7 @@ def make_maps(model, x, name):
     req_mem_allocs, mem_events = analyze_model(model, x)
     # print("len req_mem_allocs", len(req_mem_allocs))
 
-    plan_greedy_strats(req_mem_allocs, name)
+    # plan_greedy_strats(req_mem_allocs, name)
     plan_integer_programming_starts(req_mem_allocs, name)
     # plan_other(req_mem_allocs, mem_events, name)
 
@@ -168,8 +168,9 @@ if __name__ == "__main__":
     #                 make_maps(model, inp, f"{name},1x3x128x128")
     #             except Exception as e:
     #                 print(e, file=sys.stderr)
-    plot_results("res.csv")
-    # make_maps(model, torch.rand((2, 3, 100, 100)), "resnet18.2x3x100x100")
+    # plot_results("res.csv")
+    model = load_model(os.getcwd() + f"/models/resnet18.pt")
+    make_maps(model, torch.rand((2, 3, 100, 100)), "resnet18.2x3x100x100")
     # make_maps(model, torch.rand((4, 3, 100, 100)), "resnet18.4x3x100x100")
     # make_maps(model, torch.rand((8, 3, 100, 100)), "resnet18.8x3x100x100")
     # make_maps(model, torch.rand((16, 3, 100, 100)), "resnet18.16x3x100x100")

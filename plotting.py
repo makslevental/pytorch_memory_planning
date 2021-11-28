@@ -288,8 +288,8 @@ def plot_results(fp):
     leg.set_title('Strategy', prop={'size': 14})
     # ax.set_yscale("log")
     plt.tight_layout()
-    plt.show()
-    # plt.savefig("memory_bench.pdf")
+    # plt.show()
+    plt.savefig("memory_bench.pdf")
 
 if __name__ == "__main__":
     plot_results("res.csv")
