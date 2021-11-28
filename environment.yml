@@ -137,15 +137,15 @@ dependencies:
   - zlib=1.2.11=h7b6447c_3
   - zstd=1.4.9=haebb681_0
   - pip:
-    - absl-py==0.15.0
-    - cython==0.29.24
-    - nvtx==0.2.3
-    - ortools==9.1.9490
-    - protobuf==3.19.0
-    - pybind11-global==2.6.1
-    - pygraphviz==1.7
-    - python-graphviz==0.17
-    - tensorrt==8.2.0.6
-    - torch2trt==0.3.0
-    - torchvision==0.12.0a0+dbb7679
-    - z3-solver==4.8.12.0
+      - absl-py==0.15.0
+      - cython==0.29.24
+      - nvtx==0.2.3
+      - ortools==9.1.9490
+      - protobuf==3.19.0
+      - pybind11-global==2.6.1
+      - pygraphviz==1.7
+      - python-graphviz==0.17
+      - tensorrt==8.2.0.6
+      - torch2trt==0.3.0
+      - torchvision==0.12.0a0+dbb7679
+      - z3-solver==4.8.12.0

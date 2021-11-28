@@ -1,5 +1,7 @@
 from collections import namedtuple
 
+import inspect
+
 import torch
 # from torchvision import models
 # from torchvision.models.segmentation import deeplabv3_resnet50
@@ -13,6 +15,9 @@ import resnet
 # from torchvision import models
 # from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_resnet101
 # from transformers import BertTokenizer, BertModel, BertConfig
+from torchvision import models
+from torchvision.models.segmentation import deeplabv3_resnet101
+from transformers import BertTokenizer, BertModel, BertConfig
 
 
 def make_resnets():
@@ -112,9 +117,14 @@ def make_transformer():
 
     torch._C._jit_pass_propagate_shapes_on_graph(froze.graph)
     torch._C._jit_pass_canonicalize_for_shape_analysis(froze.graph)
-    compute = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(froze.graph)
+    compute = torch._C._jit_pass_propagate_shapes_on_graph_and_build_compute(
+        froze.graph
+    )
     eval_g = compute.partial_eval_shape_graph()
-    mapping = {"%" + n.debugName(): f"SS({v})" for n, v in compute.graph_output_to_symbolic_shape_dim().items()}
+    mapping = {
+        "%" + n.debugName(): f"SS({v})"
+        for n, v in compute.graph_output_to_symbolic_shape_dim().items()
+    }
 
     [node.destroy() for node in eval_g.findAllNodes("prim::RaiseException")]
     torch._C._jit_pass_dce(eval_g)
@@ -168,6 +178,35 @@ def make_unet():
     x = torch.rand((1, 3, 256, 256))
     y = torch.jit.trace(model, (x,))
     y.save(f"models/unet.pt")
+
+
+def _vision_models():
+    modelss = dict(inspect.getmembers(models, inspect.isfunction))
+    detection_models = models.detection
+    segmentation_models = models.segmentation
+    modelss.update(
+        dict(inspect.getmembers(detection_models, inspect.isfunction))
+    )
+    modelss.update(
+        dict(inspect.getmembers(segmentation_models, inspect.isfunction))
+    )
+    return modelss
+
+
+def vision_models(name):
+    return _vision_models()[name](pretrained=False)
+
+
+def make_all_vision_models():
+    modelss = _vision_models()
+    for name, model_fn in modelss.items():
+        print(name)
+        with torch.no_grad():
+            model = model_fn(pretrained=False).eval()
+            print(model)
+            x = torch.rand((1, 3, 52, 52))
+            y = torch.jit.trace(model, (x,), strict=False)
+
 
 
 def is_tensor_typ(typ):

@@ -1,5 +1,5 @@
 import json
-import os
+import sys
 from collections import namedtuple, defaultdict, deque
 from dataclasses import dataclass
 from enum import Enum
@@ -86,7 +86,9 @@ class MemRegion:
         return self.size - self.offset + 1
 
     def overlap(self, other):
-        return overlap(self.offset, self.next_free_addr, other.offset, other.next_free_addr)
+        return overlap(
+            self.offset, self.next_free_addr, other.offset, other.next_free_addr
+        )
 
     @property
     def next_free_addr(self):
@@ -106,10 +108,13 @@ class RequiredAlloc:
     ptr_addr: str
 
     def __str__(self):
-        return f"{self.lvr}:{self.size}"
+        return f"{self.lvr}:({self.size}, '{self.ptr_addr}')"
+
+    def __repr__(self):
+        return str(self)
 
     def __hash__(self):
-        return int(hashlib.sha256(str(self).encode('utf-8')).hexdigest(), 16) % 10 ** 8
+        return int(hashlib.sha256(str(self).encode("utf-8")).hexdigest(), 16) % 10 ** 8
 
 
 @dataclass
@@ -195,6 +200,7 @@ def greedy_by_size(
         *,
         gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
 ):
+    print("greedy by size", file=sys.stderr)
     # biggest size first but break ties deterministically
     req_mem_allocs.sort(key=lambda r: (r.size, r.lvr), reverse=True)
     return _greedy_by_size(req_mem_allocs, gap_finder)
@@ -205,15 +211,34 @@ def greedy_by_longest(
         *,
         gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
 ):
+    print("greedy by longest", file=sys.stderr)
     req_mem_allocs.sort(key=lambda r: (len(r.lvr), r.lvr), reverse=True)
     return _greedy_by_size(req_mem_allocs, gap_finder)
 
 
 def save_planned_allocs(allocs: List[PlannedAlloc], name):
-    json.dump([str(a) for a in allocs], open(f"planned_allocs/{name}", "w"), indent=True)
+    json.dump(
+        [str(a) for a in allocs], open(f"planned_allocs/{name}", "w"), indent=True
+    )
 
 
 MemEvent = namedtuple("MemEvent", "ptr_addr size ts")
+
+
+@dataclass
+class MemEvent:
+    ptr_addr: str
+    size: int
+    ts: int
+
+    # def __str__(self):
+    #     return f"{self.ts}:{self.size}"
+    #
+    # def __repr__(self):
+    #     return str(self)
+
+    def __hash__(self):
+        return int(hashlib.sha256(str(self).encode("utf-8")).hexdigest(), 16) % 10 ** 8
 
 
 def solve_z3():
@@ -229,6 +254,7 @@ def solve_z3():
 
 
 def bump_allocator(mem_events: List[MemEvent]):
+    print("bump_allocator", file=sys.stderr)
     mem_events.sort(key=lambda r: r.ts)
     planned_allocations: Dict[str, PlannedAlloc] = {}
     next_offset = 0
@@ -265,23 +291,29 @@ def first_available(color_list):
 def greedy_color(G, order):
     color = dict()
     for node in order:
-        used_neighbour_colors = [color[nbr] for nbr in G[node]
-                                 if nbr in color]
+        used_neighbour_colors = [color[nbr] for nbr in G[node] if nbr in color]
         color[node] = first_available(used_neighbour_colors)
     return color
 
 
 def gergov(required_allocs: List[RequiredAlloc]):
-    H = {(min([a.lvr.begin for a in required_allocs]), max([a.lvr.end for a in required_allocs])+1, 0)}
-    J = [(r.lvr.begin, r.lvr.end+1, r.size) for r in required_allocs]
+    print("gergov", file=sys.stderr)
+    H = {
+        (
+            min([a.lvr.begin for a in required_allocs]),
+            max([a.lvr.end for a in required_allocs]) + 1,
+            0,
+        )
+    }
+    J = [(r.lvr.begin, r.lvr.end + 1, r.size) for r in required_allocs]
 
     def if_there_exists(xl, xr):
         HH = IntervalTree.from_tuples(H)
         # JJ = IntervalTree.from_tuples(J)
         JJ = IntervalTree.from_tuples(J)
         for (r, c, s) in sorted(JJ.overlap(xl, xr), key=lambda j: j[0]):
-        # for (r, c, s) in JJ.overlap(xl, xr):
-        # for (r, c, s) in JJ.overlap(xl, xr):
+            # for (r, c, s) in JJ.overlap(xl, xr):
+            # for (r, c, s) in JJ.overlap(xl, xr):
             if not HH.overlaps(r, c):
                 return (r, c, s)
 
@@ -317,7 +349,8 @@ def gergov(required_allocs: List[RequiredAlloc]):
         ur, uc, us = u
         alphap_u = alphap[ur, uc, us]
         for v in VV.overlap(ur, uc):
-            if u == v: continue
+            if u == v:
+                continue
             vr, vc, vs = v
 
             alphap_v = alphap[vr, vc, vs]
@@ -332,13 +365,9 @@ def gergov(required_allocs: List[RequiredAlloc]):
 
     planned_allocs = []
     for (r, c, s), w in alpha.items():
-        lvr = LiveRange(r, c-1)
+        lvr = LiveRange(r, c - 1)
         mem_region = MemRegion(w, s)
-        planned_allocs.append(
-            PlannedAlloc(
-               lvr, mem_region
-            )
-        )
+        planned_allocs.append(PlannedAlloc(lvr, mem_region))
     return planned_allocs
 
 
@@ -364,27 +393,29 @@ def draw_nx(G):
     pos = nx.spring_layout(G)
     plt.figure()
     nx.draw(
-        G, pos, edge_color='black', width=1, linewidths=1,
-        node_size=500, node_color='pink', alpha=0.9,
-        labels={node: node for node in G.nodes()}
+        G,
+        pos,
+        edge_color="black",
+        width=1,
+        linewidths=1,
+        node_size=500,
+        node_color="pink",
+        alpha=0.9,
+        labels={node: node for node in G.nodes()},
     )
     edge_labels = {}
     for u, vs in G.adj.items():
         for v in vs:
             edge_labels[u, v] = f"{vs[v]['weight']}, {vs[v]['capacity']}"
 
-    nx.draw_networkx_edge_labels(
-        G, pos,
-        edge_labels=edge_labels,
-        font_color='red'
-    )
-    plt.axis('off')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color="red")
+    plt.axis("off")
     plt.show()
 
 
 def mincost_flow(required_allocs: List[RequiredAlloc]):
     required_allocs.sort(key=lambda r: r.lvr.begin)
-    required_allocs_to_idx = {i: r for i,r in enumerate(required_allocs)}
+    required_allocs_to_idx = {i: r for i, r in enumerate(required_allocs)}
 
     G = nx.DiGraph()
     G.add_node("s", demand=-len(required_allocs))
@@ -401,8 +432,9 @@ def mincost_flow(required_allocs: List[RequiredAlloc]):
     for i, l in enumerate(required_allocs):
         for j, r in enumerate(required_allocs[i:], start=i):
             if not l.lvr.overlap(r.lvr):
-                G.add_edge(f"l,{i}", f"r,{j}", weight=max(0, r.size - l.size), capacity=1)
-
+                G.add_edge(
+                    f"l,{i}", f"r,{j}", weight=max(0, r.size - l.size), capacity=1
+                )
 
     flow_dict = nx.min_cost_flow(G)
     total_flow = 0
@@ -415,9 +447,11 @@ def mincost_flow(required_allocs: List[RequiredAlloc]):
             allocs[v[2:]] = required_allocs_to_idx[int(v[2:])].size
 
     for u, vs in flow_dict.items():
-        if u[0] != "l": continue
+        if u[0] != "l":
+            continue
         for v, flow in vs.items():
-            if v[0] != "r" or flow != 1: continue
+            if v[0] != "r" or flow != 1:
+                continue
 
             shared_object = u[2:]
             while shared_object not in allocs:
@@ -454,6 +488,7 @@ def mincost_flow(required_allocs: List[RequiredAlloc]):
 
     return planned_allocs
 
+
 def solve_cp(required_allocs: List[RequiredAlloc]):
     model = cp_model.CpModel()
 
@@ -465,7 +500,7 @@ def solve_cp(required_allocs: List[RequiredAlloc]):
     regions = []
     for i, r in enumerate(required_allocs):
         live_range = model.NewIntervalVar(
-            r.lvr.begin, r.lvr.end+1 - r.lvr.begin, r.lvr.end+1, "live_range_%i" % i
+            r.lvr.begin, r.lvr.end + 1 - r.lvr.begin, r.lvr.end + 1, "live_range_%i" % i
         )
         live_ranges.append(live_range)
 
@@ -577,6 +612,7 @@ def solve_mip(required_allocs: List[RequiredAlloc]):
 #
 #     return inorder_of_decision_allocs, total_consumption
 
+
 def calculate_high_watermark(allocs: List[PlannedAlloc]):
     allocs.sort(key=lambda p: p.lvr.begin)
     peak = 0
@@ -666,7 +702,11 @@ if __name__ == "__main__":
         for i, ((begin, end), size) in enumerate(LSTM_lvrs.items())
     ]
 
-    trace_json = json.load(open("/home/mlevental/dev_projects/pytorch_memory_planning/traces/resnet18,1x3x128x128.json"))
+    trace_json = json.load(
+        open(
+            "/home/mlevental/dev_projects/pytorch_memory_planning/traces/resnet18,1x3x128x128.json"
+        )
+    )
     req_mem_allocs = get_required_mem_allocs(trace_json)
 
     res = gergov(req_mem_allocs)

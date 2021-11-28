@@ -141,3 +141,9 @@ cython_debug/
 memory_maps
 models
 traces
+planned_allocs
+je_malloc_runs
+req_allocs
+symbolic_models
+jemalloc_plots
+perf_records
