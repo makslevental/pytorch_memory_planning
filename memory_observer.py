@@ -219,6 +219,13 @@ def label_pointers(ops_dict, id_to_op, model_name):
     ops_dict["graph_top_trace"] = graph_top_trace
     return ops_dict
 
+import ruamel.yaml
+
+def flist(x):
+    retval = ruamel.yaml.comments.CommentedSeq(x)
+    retval.fa.set_flow_style()  # fa -> format attribute
+    return retval
+
 def print_ops_dict(ops_dict, name):
     graph_top_trace = dict(ops_dict["graph_top_trace"])
 
@@ -231,18 +238,28 @@ def print_ops_dict(ops_dict, name):
                 vals[i] = vals[i].name
 
     def stringify_type(op):
+        del op["op_id"]
         loop(op["args"], op["args types"], op["args names"])
         loop(op["returns"], op["returns types"], op["returns names"])
+        op["args"] = flist(op["args"])
+        op["args types"] = flist(op["args types"])
+        op["args names"] = flist(op["args names"])
+        op["returns"] = flist(op["returns"])
+        op["returns types"] = flist(op["returns types"])
+        op["returns names"] = flist(op["returns names"])
 
         if op.get("calls") is None:
             op["calls"] = []
         for o in op["calls"]:
             stringify_type(o)
 
+    yaml = ruamel.yaml.YAML()
+    yaml.width = 4096
+    yaml.indent = 4
     stringify_type(graph_top_trace)
-    yaml.preserve_quotes = False
     with open(f"{name}_ops_dict.yml", "w") as f:
-        yaml.dump(graph_top_trace, f, default_flow_style=None, width=1000, sort_keys=True)
+        # yaml.dump(graph_top_trace, f, default_flow_style=None, width=1000, sort_keys=False)
+        yaml.dump(graph_top_trace, f)
     with open(f"{name}_ops_dict.txt", "w") as f:
         pprint(graph_top_trace, f, width=200, sort_dicts=False, indent=1)
     with open(f"{name}_ops_dict.json", "w") as f:
