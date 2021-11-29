@@ -188,7 +188,7 @@ def label_pointers(ops_dict, id_to_op, model_name):
                 call["returns"] = [f"tensor_ptr_{call['addr']}"]
                 continue
             if call["fn_name"] == "free":
-                call["args names"] = ["ptr"]
+                call["args names"] = [addr_to_alloc[call["addr"]]]
                 call["args types"] = [TensorType.get()]
                 call["args"] = [f"tensor_ptr_{call['addr']}"]
                 call["returns names"] = []
@@ -208,7 +208,7 @@ def label_pointers(ops_dict, id_to_op, model_name):
                             parent_args_idx = next(i for i, p_arg in enumerate(parent_args_or_rets) if arg == p_arg)
                             arg_name = parent_args_or_rets_names[parent_args_idx]
                     else:
-                        arg_name = f"new_constants_{len(new_constants)}"
+                        arg_name = f"$new_constants_{len(new_constants)}"
                         new_constants[arg_name] = arg
                     call[f"{args_or_rets} names"][arg_idx] = arg_name
             percolate(call, rev)
@@ -222,15 +222,17 @@ def label_pointers(ops_dict, id_to_op, model_name):
 def print_ops_dict(ops_dict, name):
     graph_top_trace = dict(ops_dict["graph_top_trace"])
 
-    def loop(vals, typs):
+    def loop(vals, typs, names):
         for i in range(len(vals)):
             typs[i] = str(typs[i].annotation_str)
+            if names[i] is not None:
+                names[i] = names[i].replace("$", "%")
             if "Device" in typs[i] and vals[i] is not None:
                 vals[i] = vals[i].name
 
     def stringify_type(op):
-        loop(op["args"], op["args types"])
-        loop(op["returns"], op["returns types"])
+        loop(op["args"], op["args types"], op["args names"])
+        loop(op["returns"], op["returns types"], op["returns names"])
 
         if op.get("calls") is None:
             op["calls"] = []
