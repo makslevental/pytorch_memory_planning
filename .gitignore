@@ -147,3 +147,4 @@ req_allocs
 symbolic_models
 jemalloc_plots
 perf_records
+profiles

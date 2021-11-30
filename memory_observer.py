@@ -1,5 +1,7 @@
+import glob
 import sys
 from collections import defaultdict, namedtuple
+from pprint import pprint
 
 import ruamel.yaml
 
@@ -8,7 +10,7 @@ yaml.width = 4096
 yaml.indent = 4
 
 import torch
-from torch import TensorType, OptionalType, IntType, ListType
+from torch import TensorType, OptionalType, IntType, ListType, DictType
 from torch._C._autograd import DeviceType
 
 
@@ -21,8 +23,9 @@ from torch._C._autograd import DeviceType
 
 def parse_ops_yaml(fp):
     import yaml
+
     with open(fp, "r") as stream:
-        ops_dict = yaml.load(stream)
+        ops_dict = yaml.load(stream, Loader=yaml.CLoader)
 
     ops_dict["name_order"] = {
         name: i for i, name in enumerate(ops_dict["graph"].keys())
@@ -137,8 +140,6 @@ def find_out_variants(ops_dict, model_name):
     return out_variants
 
 
-
-
 def label_pointers(ops_dict, model_name):
     ops_dict = dict(ops_dict)
     ptr_addr_to_name = ops_dict["ptr_addr_to_name"]
@@ -187,9 +188,9 @@ def label_pointers(ops_dict, model_name):
                         name_order[arg_or_ret_name]
                         < name_order[ptr_addr_to_name[arg_or_ret]]
                 ):
-                    assert (
-                                   "alloc" not in ptr_addr_to_name[arg_or_ret]
-                           ) and ("alloc" not in arg_or_ret_name)
+                    assert ("alloc" not in ptr_addr_to_name[arg_or_ret]) and (
+                            "alloc" not in arg_or_ret_name
+                    )
                     ptr_addr_to_name[arg_or_ret] = arg_or_ret_name
                 else:
                     reused_ptrs[arg_or_ret].append(
@@ -221,16 +222,31 @@ def label_pointers(ops_dict, model_name):
             if parent_args_or_rets and parent_args_or_rets_names:
                 names = [None] * len(call[args_or_rets])
                 for arg_or_ret_idx, (arg_or_ret, typ) in enumerate(
-                    zip(call[args_or_rets], call[f"{args_or_rets} types"])
+                        zip(call[args_or_rets], call[f"{args_or_rets} types"])
                 ):
                     typ = call[f"{args_or_rets} types"][arg_or_ret_idx]
-                    if isinstance(typ, ListType) and isinstance(typ.getElementType(), TensorType):
+                    # TODO: optionals
+                    if isinstance(typ, ListType) and isinstance(
+                            typ.getElementType(), TensorType
+                    ):
                         arg_or_retss = arg_or_ret
                         arg_or_ret_name = []
                         for arg_or_ret in arg_or_retss:
-                            arg_or_ret_name.append(handle_tensor(call, arg_or_ret, parent_args_or_rets, parent_args_or_rets_names))
+                            arg_or_ret_name.append(
+                                handle_tensor(
+                                    call,
+                                    arg_or_ret,
+                                    parent_args_or_rets,
+                                    parent_args_or_rets_names,
+                                )
+                            )
                     elif isinstance(typ, TensorType):
-                        arg_or_ret_name = handle_tensor(call, arg_or_ret, parent_args_or_rets, parent_args_or_rets_names)
+                        arg_or_ret_name = handle_tensor(
+                            call,
+                            arg_or_ret,
+                            parent_args_or_rets,
+                            parent_args_or_rets_names,
+                        )
                     elif str(arg_or_ret) in constants_to_names:
                         arg_or_ret_name = constants_to_names[str(arg_or_ret)]
                     else:
@@ -363,14 +379,36 @@ def find_final_dispatch(ops_dict):
     torch._C._jit_get_schemas_for_operator("aten::_slow_conv2d_forward")
 
 
+def list_all_ops(profiles_fp):
+    import yaml
+
+    ops = set()
+    for fp in glob.glob(f"{profiles_fp}/*.yml"):
+        try:
+            with open(fp, "r") as stream:
+                ops_dict = yaml.load(stream, Loader=yaml.CLoader)
+            print(fp)
+            for op_name, op in ops_dict["graph"].items():
+                if op_name in {"$args", "return"}:
+                    continue
+                if len(op.split(" = ")) != 2:
+                    print(op)
+                _, op_sig = op.split(" = ")
+                op, _args = op_sig.split("(")
+                ops.add(op)
+        except:
+            pass
+    pprint(ops)
+
+
 if __name__ == "__main__":
     # parse_native_functions_yaml("/Users/mlevental/dev_projects/pytorch_shape_inference/aten/src/ATen/native/native_functions.yaml")
     # ops_dict = parse_ops_yaml("/Users/mlevental/dev_projects/pytorch_shape_inference/memory_allocator/ops.bkup.yml")
-    model_name = "unet"
+    model_name = "deeplabv3_resnet50"
     ops_dict = parse_ops_yaml(
-        "/Users/mlevental/dev_projects/pytorch_shape_inference/memory_allocator/ops_unet_64.yml",
+        "/home/mlevental/dev_projects/pytorch_memory_planning/profiles/deeplabv3_resnet50.yml",
     )
-    ops_dict = label_pointers(ops_dict, "unet")
+    ops_dict = label_pointers(ops_dict, "deeplabv3_resnet50")
     call_chains, output_allocs = match_allocs_to_outs(ops_dict)
     print_call_chains(call_chains, output_allocs, model_name)
     # print_ops_dict(ops_dict, "resnet18")
