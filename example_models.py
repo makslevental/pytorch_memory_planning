@@ -201,11 +201,11 @@ def make_all_vision_models():
 
 
 if __name__ == "__main__":
-    pass
+    # pass
     # r = resnet18()
     # print(thnn_conv2d)
     # make_transformer()
-    # make_resnets()
+    make_resnets()
 
 #
 #     def _conv_forward(self, input: Tensor, weight: Tensor, bias: Optional[Tensor]):

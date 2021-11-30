@@ -8,7 +8,7 @@ yaml.width = 4096
 yaml.indent = 4
 
 import torch
-from torch import TensorType, OptionalType, IntType
+from torch import TensorType, OptionalType, IntType, ListType
 from torch._C._autograd import DeviceType
 
 
@@ -19,7 +19,8 @@ from torch._C._autograd import DeviceType
 #     return is_tensor or (is_opt and is_opt_tensor)
 
 
-def parse_ops_yaml(fp, model_name):
+def parse_ops_yaml(fp):
+    import yaml
     with open(fp, "r") as stream:
         ops_dict = yaml.load(stream)
 
@@ -136,6 +137,8 @@ def find_out_variants(ops_dict, model_name):
     return out_variants
 
 
+
+
 def label_pointers(ops_dict, model_name):
     ops_dict = dict(ops_dict)
     ptr_addr_to_name = ops_dict["ptr_addr_to_name"]
@@ -150,6 +153,54 @@ def label_pointers(ops_dict, model_name):
     graph_top_trace["returns names"] = []
     new_constant = 0
     reused_ptrs = defaultdict(list)
+
+    def handle_tensor(call, arg_or_ret, parent_args_or_rets, parent_args_or_rets_names):
+        # have to handle list args
+        if not any(
+                (i, p_arg_or_ret)
+                for i, p_arg_or_ret in enumerate(parent_args_or_rets)
+                if arg_or_ret == p_arg_or_ret
+        ):
+            # if not passed in from parent (and not empty) then it should be a known pointer
+            if "empty" in arg_or_ret:
+                return
+            assert arg_or_ret in ptr_addr_to_name
+            arg_or_ret_name = ptr_addr_to_name[arg_or_ret]
+        else:
+            parent_args_idx = next(
+                i
+                for i, p_arg_or_ret in enumerate(parent_args_or_rets)
+                if arg_or_ret == p_arg_or_ret
+            )
+            arg_or_ret_name = parent_args_or_rets_names[parent_args_idx]
+            if arg_or_ret in ptr_addr_to_name:
+                if (
+                        ptr_addr_to_name[arg_or_ret] == arg_or_ret_name
+                        or (
+                        "alloc" in ptr_addr_to_name[arg_or_ret]
+                        and "alloc" not in arg_or_ret_name
+                )
+                        or "empty_tensor" in arg_or_ret
+                ):
+                    ptr_addr_to_name[arg_or_ret] = arg_or_ret_name
+                elif (
+                        name_order[arg_or_ret_name]
+                        < name_order[ptr_addr_to_name[arg_or_ret]]
+                ):
+                    assert (
+                                   "alloc" not in ptr_addr_to_name[arg_or_ret]
+                           ) and ("alloc" not in arg_or_ret_name)
+                    ptr_addr_to_name[arg_or_ret] = arg_or_ret_name
+                else:
+                    reused_ptrs[arg_or_ret].append(
+                        (
+                            call["op_id"],
+                            arg_or_ret_name,
+                            ptr_addr_to_name[arg_or_ret],
+                        )
+                    )
+
+        return arg_or_ret_name
 
     def percolate(caller, rev=False):
         nonlocal new_constant
@@ -173,49 +224,13 @@ def label_pointers(ops_dict, model_name):
                     zip(call[args_or_rets], call[f"{args_or_rets} types"])
                 ):
                     typ = call[f"{args_or_rets} types"][arg_or_ret_idx]
-                    if isinstance(typ, TensorType):
-                        if not any(
-                            (i, p_arg_or_ret)
-                            for i, p_arg_or_ret in enumerate(parent_args_or_rets)
-                            if arg_or_ret == p_arg_or_ret
-                        ):
-                            if "empty" in arg_or_ret:
-                                continue
-                            assert arg_or_ret in ptr_addr_to_name
-                            arg_or_ret_name = ptr_addr_to_name[arg_or_ret]
-                        else:
-                            parent_args_idx = next(
-                                i
-                                for i, p_arg_or_ret in enumerate(parent_args_or_rets)
-                                if arg_or_ret == p_arg_or_ret
-                            )
-                            arg_or_ret_name = parent_args_or_rets_names[parent_args_idx]
-                            if arg_or_ret in ptr_addr_to_name:
-                                if (
-                                    ptr_addr_to_name[arg_or_ret] == arg_or_ret_name
-                                    or (
-                                        "alloc" in ptr_addr_to_name[arg_or_ret]
-                                        and "alloc" not in arg_or_ret_name
-                                    )
-                                    or "empty_tensor" in arg_or_ret
-                                ):
-                                    ptr_addr_to_name[arg_or_ret] = arg_or_ret_name
-                                elif (
-                                    name_order[arg_or_ret_name]
-                                    < name_order[ptr_addr_to_name[arg_or_ret]]
-                                ):
-                                    assert (
-                                        "alloc" not in ptr_addr_to_name[arg_or_ret]
-                                    ) and ("alloc" not in arg_or_ret_name)
-                                    ptr_addr_to_name[arg_or_ret] = arg_or_ret_name
-                                else:
-                                    reused_ptrs[arg_or_ret].append(
-                                        (
-                                            call["op_id"],
-                                            arg_or_ret_name,
-                                            ptr_addr_to_name[arg_or_ret],
-                                        )
-                                    )
+                    if isinstance(typ, ListType) and isinstance(typ.getElementType(), TensorType):
+                        arg_or_retss = arg_or_ret
+                        arg_or_ret_name = []
+                        for arg_or_ret in arg_or_retss:
+                            arg_or_ret_name.append(handle_tensor(call, arg_or_ret, parent_args_or_rets, parent_args_or_rets_names))
+                    elif isinstance(typ, TensorType):
+                        arg_or_ret_name = handle_tensor(call, arg_or_ret, parent_args_or_rets, parent_args_or_rets_names)
                     elif str(arg_or_ret) in constants_to_names:
                         arg_or_ret_name = constants_to_names[str(arg_or_ret)]
                     else:
@@ -307,15 +322,14 @@ def match_allocs_to_outs(ops_dict):
         for a in ops_dict["allocations_list"]
         if a["fn_name"] == "allocate"
     }
-    outs = ops_dict["outs"]
-    output_allocs = {}
+    # outs = ops_dict["outs"]
+    allocs = {}
     for ptr, name in ptr_addr_to_name.items():
-        if name in outs:
-            alloc = alloc_ptr_to_alloc[ptr]
-            output_allocs[name] = alloc
+        if alloc := alloc_ptr_to_alloc.get(ptr):
+            allocs[name] = alloc
 
     call_chains = defaultdict(list)
-    for name, call in output_allocs.items():
+    for name, call in allocs.items():
         while caller_op_id := call.get("caller_op_id"):
             call_chains[name].append(caller_op_id)
             call = id_to_op[caller_op_id]
@@ -328,7 +342,7 @@ def match_allocs_to_outs(ops_dict):
                 )
         call_chains[name] = qualified_call_chain
 
-    return dict(call_chains), output_allocs
+    return dict(call_chains), allocs
 
 
 def print_call_chains(call_chains, output_allocs, file_name):
@@ -352,13 +366,13 @@ def find_final_dispatch(ops_dict):
 if __name__ == "__main__":
     # parse_native_functions_yaml("/Users/mlevental/dev_projects/pytorch_shape_inference/aten/src/ATen/native/native_functions.yaml")
     # ops_dict = parse_ops_yaml("/Users/mlevental/dev_projects/pytorch_shape_inference/memory_allocator/ops.bkup.yml")
+    model_name = "unet"
     ops_dict = parse_ops_yaml(
-        "/Users/mlevental/dev_projects/pytorch_shape_inference/memory_allocator/ops.yml",
-        "resnet18",
+        "/Users/mlevental/dev_projects/pytorch_shape_inference/memory_allocator/ops_unet_64.yml",
     )
-    ops_dict = label_pointers(ops_dict, "resnet18")
+    ops_dict = label_pointers(ops_dict, "unet")
     call_chains, output_allocs = match_allocs_to_outs(ops_dict)
-    print_call_chains(call_chains, output_allocs, "resnet18")
+    print_call_chains(call_chains, output_allocs, model_name)
     # print_ops_dict(ops_dict, "resnet18")
     # find_out_variants(ops_dict, "resnet18")
     # parse_native_functions_yaml("/Users/mlevental/dev_projects/pytorch_shape_inference/aten/src/ATen/native/native_functions.yaml")
