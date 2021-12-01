@@ -3,6 +3,8 @@ import inspect
 import torch
 # from torchvision import models
 # from torchvision.models.segmentation import deeplabv3_resnet50
+from torch import nn
+from torch.nn import functional as F
 from torch._C._autograd import DeviceType
 # from torchvision import models
 # from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_resnet101
@@ -189,6 +191,35 @@ def vision_models(name):
     return _vision_models()[name](pretrained=False)
 
 
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 10)
+
+    def forward(self, x):
+        # input_shape = x.shape[-2:]
+        # x = F.interpolate(x, size=[64, 64], mode='bilinear', align_corners=False)
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = torch.flatten(x, 1)  # flatten all dimensions except batch
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+def make_toy_model():
+    x = torch.rand((1, 3, 32, 32))
+
+    model = Net()
+    model.eval()
+    y = torch.jit.trace(model, (x,), strict=False)
+    y.save(f"models/toy_model.pt")
+
 def make_all_vision_models():
     modelss = _vision_models()
     for name, model_fn in modelss.items():
@@ -205,8 +236,7 @@ if __name__ == "__main__":
     # r = resnet18()
     # print(thnn_conv2d)
     # make_transformer()
-    make_resnets()
-
+    make_toy_model()
 #
 #     def _conv_forward(self, input: Tensor, weight: Tensor, bias: Optional[Tensor]):
 # # (Tensor self, Tensor weight, int[2] kernel_size, Tensor? bias, int[2] stride, int[2] padding) -> (Tensor output, Tensor finput)
