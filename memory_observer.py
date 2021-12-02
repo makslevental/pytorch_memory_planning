@@ -1,6 +1,10 @@
 import glob
+import multiprocessing
+import os
 import sys
-from collections import defaultdict, namedtuple
+import traceback
+import warnings
+from collections import defaultdict
 from pprint import pprint
 
 import ruamel.yaml
@@ -10,7 +14,7 @@ yaml.width = 4096
 yaml.indent = 4
 
 import torch
-from torch import TensorType, OptionalType, IntType, ListType, DictType, StringType
+from torch import TensorType, IntType, ListType, DictType, StringType, BoolType
 from torch._C._autograd import DeviceType
 
 
@@ -20,19 +24,75 @@ from torch._C._autograd import DeviceType
 #     is_opt_tensor = is_opt and isinstance(typ.getElementType(), TensorType)
 #     return is_tensor or (is_opt and is_opt_tensor)
 
+def find_idx(val, ls):
+    return next(i for i, v in enumerate(ls) if v == val)
+
+
 def find_graph_top(ops_dict, model_name):
-    return next(t for t in ops_dict["trace"] if t["fn_name"] == model_name)
+    return next(t for t in ops_dict["calls"] if t["fn_name"] == model_name)
 
 
-def parse_ops_yaml(fp, model_name):
+def load_ops_yaml(model_name):
     import yaml
 
-    with open(fp, "r") as stream:
+    with open(f"profiles/{model_name}.yml", "r") as stream:
         ops_dict = yaml.load(stream, Loader=yaml.CLoader)
+    ops_dict["model_name"] = model_name
+    return ops_dict
 
-    name_order = ops_dict["name_order"] = {
-        name: i for i, name in enumerate(ops_dict["graph"].keys())
-    }
+
+def with_log(fn, model_name):
+    sys.stderr = open(f"logs/{model_name}.err", "a")
+    sys.stdout = open(f"logs/{model_name}.log", "a")
+    try:
+        fn(model_name)
+    except:
+        traceback.print_exc()
+
+
+def ls_or_empty(op, key):
+    return op.get(key, [])
+
+
+def get_torch_type_of_python_val(val):
+    if isinstance(val, int):
+        return IntType.get()
+    if isinstance(val, str):
+        return StringType.get()
+    if isinstance(val, bool):
+        return BoolType.get()
+
+
+def make_torch_type(typ, nested_type=None):
+    if isinstance(typ, str) and "Int" in typ:
+        typ = IntType.get()
+    elif isinstance(typ, str) and "String" in typ:
+        typ = StringType.get()
+    elif isinstance(typ, str) and "Tensor" in typ:
+        typ = TensorType.get()
+    elif isinstance(typ, str) and "List" in typ:
+        assert nested_type is not None
+        typ = ListType(make_torch_type(nested_type))
+    elif isinstance(typ, dict):
+        [(k, v)] = list(typ.items())
+        typ = DictType(make_torch_type(k), make_torch_type(v))
+    else:
+        raise "unrecognized typ"
+    return typ
+
+
+def parse_ops_dict(ops_dict):
+    model_name = ops_dict["model_name"]
+    id_to_op = {}
+
+    def dfs(op):
+        id_to_op[op["op_id"]] = op
+        for o in (op.get("calls") or []):
+            dfs(o)
+
+    for call in ops_dict["calls"]:
+        dfs(call)
+
     allocations = {}
     addr_to_alloc = {}
     for alloc in ops_dict["allocations_list"]:
@@ -43,48 +103,10 @@ def parse_ops_yaml(fp, model_name):
             assert alloc["addr"] not in addr_to_alloc
             addr_to_alloc[alloc["addr"]] = name
 
-    ops_dict["addr_to_alloc"] = addr_to_alloc
-    ops_dict["allocations"] = allocations
-
-    id_to_op = {}
-    ptr_addr_to_name = {}
-
-    def loop(vals, typs, names, schema_args=None):
-        nonlocal ptr_addr_to_name
-        for i in range(len(vals)):
-            if schema_args is not None:
-                typs[i] = schema_args[i].type
-            if isinstance(typs[i], TensorType) or isinstance(typs[i], str) and typs[i] == "Tensor":
-                typs[i] = TensorType.get()
-                if i < len(names):
-                    if vals[i] in ptr_addr_to_name:
-                        if ptr_addr_to_name[vals[i]] != names[i]:
-                            assert name_order[ptr_addr_to_name[vals[i]]] < name_order[names[i]]
-                    else:
-                        ptr_addr_to_name[vals[i]] = names[i]
-            if isinstance(typs[i], str) and "String" in typs[i]:
-                typs[i] = StringType.get()
-            if isinstance(typs[i], str) and "Tensor" in typs[i]:
-                typs[i] = TensorType.get()
-            if isinstance(typs[i], str) and "List" in typs[i]:
-                typs[i] = ListType(IntType.get())
-            if isinstance(typs[i], dict):
-                k, v = typs[i]["Dict"]
-                if isinstance(k, StringType) and isinstance(v, TensorType):
-                    typs[i] = DictType(k, v)
-                else:
-                    raise "wtf"
-
-            if vals[i] == "None":
-                assert isinstance(typs[i], OptionalType)
-                vals[i] = None
-            if isinstance(typs[i], str) and typs[i] == "Device":
-                vals[i] = getattr(DeviceType, vals[i].upper())
-
-    def fill_in_type(op):
-        nonlocal ops_dict, ptr_addr_to_name
-        id_to_op[op["op_id"]] = op
-
+    def fill_args_types_names_op(op):
+        for k in ["calls", "returns", "returns types", "returns names"]:
+            if op.get(k) is None:
+                op[k] = []
         if op["fn_name"] == "allocate":
             op["args names"] = ["nbytes"]
             op["args types"] = [IntType.get()]
@@ -92,76 +114,126 @@ def parse_ops_yaml(fp, model_name):
             op["returns names"] = [addr_to_alloc[op["addr"]]]
             op["returns types"] = [TensorType.get()]
             op["returns"] = [f"tensor_ptr_{op['addr']}"]
-            op["calls"] = []
             return
-        if op["fn_name"] == "free":
+        elif op["fn_name"] == "free":
             op["args names"] = [addr_to_alloc[op["addr"]]]
             op["args types"] = [TensorType.get()]
             op["args"] = [f"tensor_ptr_{op['addr']}"]
-            op["returns names"] = []
-            op["returns types"] = []
-            op["returns"] = []
-            op["calls"] = []
             return
-
-        schema = namedtuple("schema", ["arguments", "returns"])(None, None)
-        if op["schema"] != "no schema":
+        elif op["schema"] != "no schema":
             schema = torch._C.parse_schema(op["schema"])
+            if "args types" not in op:
+                raise "schema but no types?"
+            types = op["args types"]
+            for i, typ in enumerate(op["args types"]):
+                types[i] = schema.arguments[i].type
+            types = op["returns types"]
+            for i, typ in enumerate(op["returns types"]):
+                types[i] = schema.returns[i].type
+        elif op["fn_name"] == "prim::DictConstruct":
+            op["returns types"] = [make_torch_type(dict([op["args types"]]))]
+            op["returns"] = [{}]
+            for i in range(0, len(op["args"]), 2):
+                op["returns"][0][op["args"][i]] = op["args"][i + 1]
+            op["args types"] = [make_torch_type(a) for a in op["args types"]]
+        elif op["fn_name"] == "prim::ListConstruct":
+            op["returns types"] = [make_torch_type("List", op["args types"][0])]
+            op["args types"] = [make_torch_type(a) for a in op["args types"]]
+            op["returns"] = [op["args"]]
         else:
-            # graph inputs
-            if op["fn_name"] == model_name:
-                op["args names"] = list(ops_dict["graph"]["$args"].keys())
-                op["args types"] = list(ops_dict["graph"]["$args"].values())
-                op["returns names"] = ops_dict["graph"]["return"].replace("(", "").replace(")", "").split(",")
-            elif op["fn_name"] == "prim::DictConstruct":
-                op["returns types"] = [{"Dict": op["args types"]}]
-                op["returns"] = [{}]
-                ptr_addr_to_name[tuple(op["args"])] = op["returns names"][0]
-                for i in range(0, len(op["args"]), 2):
-                    op["returns"][0][op["args"][i]] = op["args"][i + 1]
-            elif op["fn_name"] == "prim::ListConstruct":
-                op["returns types"] = ["List"]
-                op["returns"] = [op["args"]]
-                ptr_addr_to_name[tuple(op["args"])] = op["returns names"][0]
+            warnings.warn("no schema: " + op["fn_name"])
 
-        loop(op["args"], op["args types"], op["args names"], schema.arguments)
-        loop(op["returns"], op["returns types"], op["returns names"], schema.returns)
+    for op in id_to_op.values():
+        fill_args_types_names_op(op)
 
-        if "calls" in op and op["calls"] is None:
-            op["calls"] = []
+    name_order = {}
+    i = 0
+    for id, op in id_to_op.items():
+        for name in ls_or_empty(op, "returns names"):
+            i += 1
+            name_order[name] = (i, id)
+
+    graph_top = find_graph_top(ops_dict, model_name)
+    graph_top["args types"] = [make_torch_type(typ) for typ in graph_top["args types"]]
+    graph_top["args names"] = list(ops_dict["graph"]["$args"].keys())
+    last_compute_op_id = next(
+        compute_op_id for name, (_order, compute_op_id) in reversed(name_order.items()) if "alloc" not in name)
+    graph_top["returns"] = id_to_op[last_compute_op_id]["returns"]
+    graph_top["returns types"] = id_to_op[last_compute_op_id]["returns types"]
+    graph_top["returns names"] = id_to_op[last_compute_op_id]["returns names"]
+
+    for id, op in id_to_op.items():
         for o in op["calls"]:
             o["caller_op_id"] = op["op_id"]
-            if o.get("args names") is None:
-                o["args names"] = []
-            if o.get("returns names") is None:
-                o["returns names"] = []
-            fill_in_type(o)
 
-    for op in ops_dict["trace"]:
-        if op.get("args names") is None:
-            op["args names"] = []
-        if op.get("returns names") is None:
-            op["returns names"] = []
-        fill_in_type(op)
+    name_to_ptr = {}
+    for id, op in id_to_op.items():
+        for i, name in enumerate(ls_or_empty(op, "returns names")):
+            if isinstance(op["returns types"][i], TensorType):
+                if name in name_to_ptr:
+                    assert name in graph_top["returns names"]
+                else:
+                    name_to_ptr[name] = op["returns"][i]
+        for i, name in enumerate(ls_or_empty(op, "args names")):
+            if isinstance(op["args types"][i], TensorType):
+                ptr = op["args"][i]
+                if name in name_to_ptr:
+                    assert name_to_ptr[name] == ptr
+                else:
+                    name_to_ptr[name] = ptr
 
-    for k, v in ops_dict["constants"].items():
-        # TODO: need to handle actual constants here
-        if isinstance(v, str) and "tensor" in v:
-            ptr_addr_to_name[v] = k
-    # for addr, alloc_name in addr_to_alloc.items():
-    #     ptr_addr_to_name[f"tensor_ptr_{addr}"] = alloc_name
+    for name, alloc_ptr in allocations.items():
+        name_to_ptr[name] = f"tensor_ptr_{alloc_ptr}"
 
-    ops_dict["ptr_addr_to_name"] = ptr_addr_to_name
-    ops_dict["outs"] = {
-        name: dump
-        for name, dump in ops_dict["graph"].items()
-        if isinstance(dump, str) and "Constant" not in dump
-    }
+    for cons_name, maybe_ptr in ops_dict["constants"].items():
+        if isinstance(maybe_ptr, str) and "tensor_ptr" in maybe_ptr:
+            name_to_ptr[cons_name] = maybe_ptr
+
+    ptr_to_names = defaultdict(list)
+    for name, ptr in name_to_ptr.items():
+        ptr_to_names[ptr].append(name)
+
+    ptr_addr_to_name = {}
+    for ptr, names in ptr_to_names.items():
+        if len(names) > 1:
+            # case 1 function call with output name for allocation
+            if len(names) == 2:
+                assert "alloc" not in names[0]
+                assert "alloc" in names[1]
+                assert name_order[names[0]] < name_order[names[1]]
+            # case 2 after an alloc, true aliasing by passing through function boundary
+            else:
+                allocs = [(i, n) for i, n in enumerate(names) if "alloc" in n]
+                others = [(i, n) for i, n in enumerate(names) if "alloc" not in n]
+
+                for i, alloc_name in allocs:
+                    for _, other_name in filter(lambda x: x[0] < i, others):
+                        assert name_order[other_name] < name_order[alloc_name]
+                    for _, other_name in filter(lambda x: x[0] > i, others):
+                        assert name_order[alloc_name] < name_order[other_name]
+
+                for i in range(len(others) - 1):
+                    (_, return_name), (_, arg_name) = others[i], others[i + 1]
+                    assert name_order[return_name] < name_order[arg_name]
+                    # assert name_order[return_name] < name_order[alloc_name] < name_order[arg_name]
+                    first_op = id_to_op[name_order[return_name][1]]
+                    second_op = id_to_op[name_order[arg_name][1]]
+                    assert ptr in first_op["returns"]
+                    assert ptr in second_op["args"]
+                names = [names[-1]]
+
+        assert ptr not in ptr_addr_to_name
+        ptr_addr_to_name[ptr] = names[0]
+
     ops_dict["id_to_op"] = id_to_op
+    ops_dict["name_order"] = name_order
+    ops_dict["name_to_ptr"] = name_to_ptr
+    ops_dict["ptr_addr_to_name"] = ptr_addr_to_name
     return ops_dict
 
 
-def find_out_variants(ops_dict, model_name):
+def find_out_variants(ops_dict):
+    model_name = ops_dict["model_name"]
     out_variants = {}
 
     def check_schema(op):
@@ -174,16 +246,16 @@ def find_out_variants(ops_dict, model_name):
         for o in op.get("calls") or []:
             check_schema(o)
 
-    for op in ops_dict["trace"]:
+    for op in ops_dict["calls"]:
         check_schema(op)
 
     return out_variants
 
 
-def label_pointers(ops_dict, model_name):
+def label_pointers(ops_dict):
+    model_name = ops_dict["model_name"]
     ops_dict = dict(ops_dict)
     ptr_addr_to_name = ops_dict["ptr_addr_to_name"]
-    addr_to_alloc = ops_dict["addr_to_alloc"]
     constants = ops_dict["constants"]
     name_order = ops_dict["name_order"]
     constants_to_names = {str(v): k for k, v in constants.items()}
@@ -206,8 +278,6 @@ def label_pointers(ops_dict, model_name):
                 return
             if arg_or_ret in ptr_addr_to_name:
                 arg_or_ret_name = ptr_addr_to_name[arg_or_ret]
-            elif arg_or_ret.replace("tensor_ptr_", "") in addr_to_alloc:
-                arg_or_ret_name = addr_to_alloc[arg_or_ret.replace("tensor_ptr_", "")]
             else:
                 raise "wtf"
         else:
@@ -222,27 +292,29 @@ def label_pointers(ops_dict, model_name):
         if arg_or_ret not in ptr_addr_to_name:
             ptr_addr_to_name[arg_or_ret] = arg_or_ret_name
         elif not (ptr_addr_to_name[arg_or_ret] == arg_or_ret_name):
-            # valid reasons for repeats
-
             # updating with top level visible names
-            if "alloc" in ptr_addr_to_name[arg_or_ret] and "alloc" not in arg_or_ret_name:
+            if (
+                    "alloc" in ptr_addr_to_name[arg_or_ret]
+                    and "alloc" not in arg_or_ret_name
+            ):
                 ptr_addr_to_name[arg_or_ret] = arg_or_ret_name
             # updating with dominating name (passed in and out of a single op y = f(X), then y aliases x
-            elif (
-                    name_order[arg_or_ret_name]
-                    < name_order[ptr_addr_to_name[arg_or_ret]]
-            ):
+            elif name_order[arg_or_ret_name] < name_order[ptr_addr_to_name[arg_or_ret]]:
                 # can't happen with allocs because they come out of `allocate`
                 assert ("alloc" not in ptr_addr_to_name[arg_or_ret]) and (
                         "alloc" not in arg_or_ret_name
                 )
-                assert (ptr_addr_to_name[arg_or_ret], arg_or_ret_name) not in known_aliases
+                assert (
+                           ptr_addr_to_name[arg_or_ret],
+                           arg_or_ret_name,
+                       ) not in known_aliases
                 # tuple order corresponds to name_order
                 known_aliases.add((arg_or_ret_name, ptr_addr_to_name[arg_or_ret]))
                 ptr_addr_to_name[arg_or_ret] = arg_or_ret_name
             # we should be catching aliases in the correct order (later gets seen first because we percolate backwards first)
-            elif (name_order[arg_or_ret_name]
-                  >= name_order[ptr_addr_to_name[arg_or_ret]]):
+            elif (
+                    name_order[arg_or_ret_name] >= name_order[ptr_addr_to_name[arg_or_ret]]
+            ):
                 assert (ptr_addr_to_name[arg_or_ret], arg_or_ret_name) in known_aliases
             else:
                 raise "wtf"
@@ -276,6 +348,8 @@ def label_pointers(ops_dict, model_name):
                                 parent_args_or_rets_names,
                             )
                         )
+                elif isinstance(typ, DictType):
+                    arg_or_ret_name = parent_args_or_rets_names[0]
                 elif isinstance(typ, TensorType):
                     arg_or_ret_name = handle_tensor(
                         call,
@@ -286,7 +360,9 @@ def label_pointers(ops_dict, model_name):
                 elif str(arg_or_ret) in constants_to_names:
                     arg_or_ret_name = constants_to_names[str(arg_or_ret)]
                 else:
-                    print(call["op_id"], arg_or_ret, file=sys.stderr)
+                    if isinstance(arg_or_ret, str) and "tensor_ptr" in arg_or_ret:
+                        raise "wtf"
+                    warnings.warn(f'new constant {call["op_id"]} {arg_or_ret}')
                     new_constant += 1
                     arg_or_ret_name = f"$new_constant_{new_constant}"
                     constants[arg_or_ret_name] = str(arg_or_ret)
@@ -309,9 +385,6 @@ def label_pointers(ops_dict, model_name):
                 percolate(this_calls, this_args_or_rets, this_args_or_rets_names, rev)
 
     graph_top_trace = find_graph_top(ops_dict, model_name)
-    for i, arg in enumerate(graph_top_trace["args"]):
-        ptr_addr_to_name[arg] = graph_top_trace["args names"][i]
-
     calls = graph_top_trace["calls"]
     args = graph_top_trace["args"]
     args_names = graph_top_trace["args names"]
@@ -323,12 +396,6 @@ def label_pointers(ops_dict, model_name):
     percolate(calls, args, args_names, rev=False)
     percolate(calls, returns, returns_names, rev=True)
     percolate(calls, args, args_names, rev=False)
-
-    name_to_ptr = {v: k for k, v in ptr_addr_to_name.items()}
-    graph_top_trace["returns"] = []
-    for r in graph_top_trace["returns names"]:
-        assert r in ops_dict["outs"]
-        graph_top_trace["returns"].append(name_to_ptr[r])
 
     ops_dict["graph_top_trace"] = graph_top_trace
 
@@ -420,7 +487,7 @@ def match_allocs_to_outs(ops_dict):
             if id_to_op[op_id]["schema"] != "no schema":
                 fn = f"{id_to_op[op_id]['fn_name']}({{}})"
                 args = []
-                for arg in id_to_op[op_id]['args']:
+                for arg in id_to_op[op_id]["args"]:
                     if not isinstance(arg, str):
                         args.append(str(arg))
                     elif "tensor_ptr" in arg:
@@ -438,9 +505,7 @@ def match_allocs_to_outs(ops_dict):
                             args.append(arg)
                     else:
                         args.append(arg)
-                qualified_call_chain.append(
-                    fn.format(", ".join(args))
-                )
+                qualified_call_chain.append(fn.format(", ".join(args)))
         qualified_call_chain.append(f"allocate({size})")
         call_chains[fn_name] = qualified_call_chain
 
@@ -450,12 +515,18 @@ def match_allocs_to_outs(ops_dict):
     for k, v in call_chains.items():
         unique_call_chains[tuple(v)].append(k)
     if len(unique_call_chains) != len(allocs):
-        for c, ks in {c: ks for c, ks in unique_call_chains.items() if len(ks) > 1}.items():
+        for c, ks in {
+            c: ks for c, ks in unique_call_chains.items() if len(ks) > 1
+        }.items():
             print(c, ks)
             for k in ks:
                 pprint((k, allocs[k]["addr"], allocs[k]["size"]))
 
-    return dict(call_chains), allocs
+    sorted_call_chain = {}
+    name_order = ops_dict["name_order"]
+    for name, chain in sorted(call_chains.items(), key=lambda name_chain: name_order[name_chain[0]]):
+        sorted_call_chain[name] = chain
+    return sorted_call_chain, allocs
 
 
 def print_call_chains(call_chains, output_allocs, file_name):
@@ -498,18 +569,62 @@ def list_all_ops(profiles_fp):
     pprint(ops)
 
 
-if __name__ == "__main__":
-    # parse_native_functions_yaml("/Users/mlevental/dev_projects/pytorch_shape_inference/aten/src/ATen/native/native_functions.yaml")
-    # ops_dict = parse_ops_yaml("/Users/mlevental/dev_projects/pytorch_shape_inference/memory_allocator/ops.bkup.yml")
-    # model_name = "deeplabv3_mobilenet_v3_large"
-    model_name = "efficientnet_b0"
-    ops_dict = parse_ops_yaml(
-        f"/home/mlevental/dev_projects/pytorch_memory_planning/profiles/{model_name}.yml",
-        model_name
-    )
-    ops_dict = label_pointers(ops_dict, model_name)
+def main(model_name):
+    print(model_name)
+    ops_dict = load_ops_yaml(model_name)
+    ops_dict = parse_ops_dict(ops_dict)
+    ops_dict = label_pointers(ops_dict)
     call_chains, output_allocs = match_allocs_to_outs(ops_dict)
     print_call_chains(call_chains, output_allocs, model_name)
+
+
+def fix_yaml(fp):
+    f = open(fp, "r+")
+    f_lines = f.readlines()
+    print(f_lines[0])
+    gr = f_lines[0]
+    if "graph:" in gr:
+        return
+    gr = gr.replace("graph(", "").replace("):\n", "")
+    gr_fix = f"graph:\n  $args:\n    {gr}\n"
+    f_lines[0] = gr_fix
+    f.seek(0)
+    f.writelines(f_lines)
+
+
+# def f(x):
+#     return x*x
+#
+# if __name__ == '__main__':
+#     with Pool(processes=4) as pool:         # start 4 worker processes
+#         result = pool.apply_async(f, (10,)) # evaluate "f(10)" asynchronously in a single process
+#     print(result.get())
+# print(result.get(timeout=1))        # prints "100" unless your computer is *very* slow
+#
+# print(pool.map(f, range(10)))       # prints "[0, 1, 4,..., 81]"
+#
+# it = pool.imap(f, range(10))
+# print(next(it))                     # prints "0"
+# print(next(it))                     # prints "1"
+# print(it.next(timeout=1))           # prints "4" unless your computer is *very* slow
+#
+# result = pool.apply_async(time.sleep, (10,))
+# print(result.get(timeout=1))        # raises multiprocessing.TimeoutError
+
+if __name__ == "__main__":
+    # for i, fp in enumerate(glob.glob("profiles/*.yml")):
+
+    with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+        for i, fp in enumerate(glob.glob("profiles/*.yml")):
+            fix_yaml(fp)
+            model_name = os.path.splitext(os.path.split(fp)[-1])[-2]
+            pool.apply_async(with_log, (main, model_name))
+        pool.close()
+        pool.join()
+    # for i, fp in enumerate(glob.glob("profiles/*.yml")):
+    #     model_name = os.path.splitext(os.path.split(fp)[-1])[-2]
+    #     main(model_name)
+
     # print_ops_dict(ops_dict, "resnet18")
     # find_out_variants(ops_dict, "resnet18")
     # parse_native_functions_yaml("/Users/mlevental/dev_projects/pytorch_shape_inference/aten/src/ATen/native/native_functions.yaml")
