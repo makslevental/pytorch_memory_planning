@@ -183,7 +183,7 @@ def parse_ops_dict(ops_dict):
         for o in op["calls"]:
             o["caller_op_id"] = op["op_id"]
 
-    name_to_ptr = {}
+    name_to_ptr = {name: arg for arg, name in zip(graph_top["args"], graph_top["args names"])}
     for id, op in id_to_op.items():
         for i, name in enumerate(ls_or_empty(op, "returns names")):
             if isinstance(op["returns types"][i], TensorType):
@@ -651,9 +651,9 @@ def match_allocs_to_outs(ops_dict):
 
 
 def print_call_chains(call_chains, grouped_allocs, output_allocs, file_name):
-    call_chains = {k.replace("$", "%"): v for k,v in call_chains.items()}
-    grouped_allocs = {k.replace("$", "%"): v for k,v in grouped_allocs.items()}
-    output_allocs = {k.replace("$", "%"): v for k,v in output_allocs.items()}
+    call_chains = {k.replace("$", "%"): v for k, v in call_chains.items()}
+    grouped_allocs = {k.replace("$", "%"): v for k, v in grouped_allocs.items()}
+    output_allocs = {k.replace("$", "%"): v for k, v in output_allocs.items()}
 
     for name, output_alloc in output_allocs.items():
         output_allocs[name] = stringify_type(output_alloc, if_flist=False)
@@ -713,13 +713,13 @@ def list_all_ops(profiles_fp):
 
 
 def main(model_name):
-    fix_yaml(model_name)
     print(model_name)
+    fix_yaml(model_name)
     ops_dict = load_ops_yaml(model_name)
-    # ops_dict = parse_ops_dict(ops_dict)
-    # ops_dict = label_pointers(ops_dict)
-    # sorted_call_chain, grouped_allocs, allocs = match_allocs_to_outs(ops_dict)
-    # print_call_chains(sorted_call_chain, grouped_allocs, allocs, model_name)
+    ops_dict = parse_ops_dict(ops_dict)
+    ops_dict = label_pointers(ops_dict)
+    sorted_call_chain, grouped_allocs, allocs = match_allocs_to_outs(ops_dict)
+    print_call_chains(sorted_call_chain, grouped_allocs, allocs, model_name)
 
 
 def fix_yaml(model_name):
@@ -756,26 +756,24 @@ def fix_yaml(model_name):
 # print(result.get(timeout=1))        # raises multiprocessing.TimeoutError
 
 if __name__ == "__main__":
-    # with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
-    #     for i, fp in enumerate(glob.glob("profiles/*.yml")):
-    #         model_name = os.path.splitext(os.path.split(fp)[-1])[-2]
-    #         if "alexnet.x" not in model_name: continue
-    #         fix_yaml(model_name)
-    #         pool.apply_async(with_log, (main, model_name))
-    #     pool.close()
-    #     pool.join()
+    with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+        for i, fp in enumerate(glob.glob("profiles/*.yml")):
+            model_name = os.path.splitext(os.path.split(fp)[-1])[-2]
+            fix_yaml(model_name)
+            pool.apply_async(with_log, (main, model_name))
+        pool.close()
+        pool.join()
 
-    for i in range(1, 11):
-        ops_dict = load_ops_yaml(f"alexnet.x{i}")
-        for j, alloc in enumerate(ops_dict["allocations_list"]):
-            del alloc["op_id"]
-            del alloc["addr"]
-            ops_dict["allocations_list"][j] = tuple(map(str, alloc.values()))
-
-        c = Counter(ops_dict["allocations_list"])
-        print(i, c)
-
-
+    # for i in range(1, 11):
+    #     ops_dict = load_ops_yaml(f"alexnet.x{i}")
+    #     for j, alloc in enumerate(ops_dict["allocations_list"]):
+    #         del alloc["op_id"]
+    #         del alloc["addr"]
+    #         ops_dict["allocations_list"][j] = tuple(map(str, alloc.values()))
+    #
+    #     c = Counter(ops_dict["allocations_list"])
+    #     print(i, c)
+    #
         #     alexnets[i] = json.load(open(f"call_chains/alexnet.x{i}.json"))
     # print(alexnets)
     # for i, fp in enumerate(glob.glob("profiles/*.yml")):
