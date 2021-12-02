@@ -1,10 +1,11 @@
 import glob
+import json
 import multiprocessing
 import os
 import sys
 import traceback
 import warnings
-from collections import defaultdict
+from collections import defaultdict, Counter
 from pprint import pprint
 
 import ruamel.yaml
@@ -23,6 +24,7 @@ from torch._C._autograd import DeviceType
 #     is_opt = isinstance(typ, OptionalType)
 #     is_opt_tensor = is_opt and isinstance(typ.getElementType(), TensorType)
 #     return is_tensor or (is_opt and is_opt_tensor)
+
 
 def find_idx(val, ls):
     return next(i for i, v in enumerate(ls) if v == val)
@@ -87,7 +89,7 @@ def parse_ops_dict(ops_dict):
 
     def dfs(op):
         id_to_op[op["op_id"]] = op
-        for o in (op.get("calls") or []):
+        for o in op.get("calls") or []:
             dfs(o)
 
     for call in ops_dict["calls"]:
@@ -143,6 +145,13 @@ def parse_ops_dict(ops_dict):
         else:
             warnings.warn("no schema: " + op["fn_name"])
 
+        for i, arg in enumerate(op["args"]):
+            if isinstance(arg, list):
+                op["args"][i] = tuple(arg)
+        for i, arg in enumerate(op["returns"]):
+            if isinstance(arg, list):
+                op["returns"][i] = tuple(arg)
+
     for op in id_to_op.values():
         fill_args_types_names_op(op)
 
@@ -157,10 +166,18 @@ def parse_ops_dict(ops_dict):
     graph_top["args types"] = [make_torch_type(typ) for typ in graph_top["args types"]]
     graph_top["args names"] = list(ops_dict["graph"]["$args"].keys())
     last_compute_op_id = next(
-        compute_op_id for name, (_order, compute_op_id) in reversed(name_order.items()) if "alloc" not in name)
+        compute_op_id
+        for name, (_order, compute_op_id) in reversed(name_order.items())
+        if "alloc" not in name
+    )
     graph_top["returns"] = id_to_op[last_compute_op_id]["returns"]
     graph_top["returns types"] = id_to_op[last_compute_op_id]["returns types"]
     graph_top["returns names"] = id_to_op[last_compute_op_id]["returns names"]
+
+    outs = []
+    for call in graph_top["calls"]:
+        outs.extend(call["returns names"])
+    assert len(outs) == len(set(outs))
 
     for id, op in id_to_op.items():
         for o in op["calls"]:
@@ -203,28 +220,37 @@ def parse_ops_dict(ops_dict):
                 assert name_order[names[0]] < name_order[names[1]]
             # case 2 after an alloc, true aliasing by passing through function boundary
             else:
-                allocs = [(i, n) for i, n in enumerate(names) if "alloc" in n]
-                others = [(i, n) for i, n in enumerate(names) if "alloc" not in n]
-
-                for i, alloc_name in allocs:
-                    for _, other_name in filter(lambda x: x[0] < i, others):
-                        assert name_order[other_name] < name_order[alloc_name]
-                    for _, other_name in filter(lambda x: x[0] > i, others):
-                        assert name_order[alloc_name] < name_order[other_name]
-
-                for i in range(len(others) - 1):
-                    (_, return_name), (_, arg_name) = others[i], others[i + 1]
-                    assert name_order[return_name] < name_order[arg_name]
-                    # assert name_order[return_name] < name_order[alloc_name] < name_order[arg_name]
-                    first_op = id_to_op[name_order[return_name][1]]
-                    second_op = id_to_op[name_order[arg_name][1]]
-                    assert ptr in first_op["returns"]
-                    assert ptr in second_op["args"]
+                names = [
+                    max(
+                        [n for n in names if "alloc" not in n],
+                        key=lambda x: name_order[x],
+                    )
+                ]
+                # allocs = [(i, n) for i, n in enumerate(names) if "alloc" in n]
+                # others = [(i, n) for i, n in enumerate(names) if "alloc" not in n]
+                #
+                #
+                # for i, alloc_name in allocs:
+                #     for _, other_name in filter(lambda x: x[0] < i, others):
+                #         if name_order[other_name] > name_order[alloc_name]:
+                #             warnings.warn(f"{other_name} {alloc_name}: {name_order[other_name]} < {name_order[alloc_name]}")
+                #     for _, other_name in filter(lambda x: x[0] > i, others):
+                #         warnings.warn(f"{alloc_name} {other_name}: {name_order[alloc_name]} > {name_order[other_name]}")
+                #
+                # for i in range(len(others) - 1):
+                #     (_, return_name), (_, arg_name) = others[i], others[i + 1]
+                #     assert name_order[return_name] < name_order[arg_name]
+                #     # assert name_order[return_name] < name_order[alloc_name] < name_order[arg_name]
+                #     first_op = id_to_op[name_order[return_name][1]]
+                #     second_op = id_to_op[name_order[arg_name][1]]
+                #     assert ptr in first_op["returns"]
+                #     assert ptr in second_op["args"]
                 names = [names[-1]]
 
         assert ptr not in ptr_addr_to_name
         ptr_addr_to_name[ptr] = names[0]
 
+    ops_dict["outs"] = set(outs)
     ops_dict["id_to_op"] = id_to_op
     ops_dict["name_order"] = name_order
     ops_dict["name_to_ptr"] = name_to_ptr
@@ -256,12 +282,9 @@ def label_pointers(ops_dict):
     model_name = ops_dict["model_name"]
     ops_dict = dict(ops_dict)
     ptr_addr_to_name = ops_dict["ptr_addr_to_name"]
-    constants = ops_dict["constants"]
     name_order = ops_dict["name_order"]
-    constants_to_names = {str(v): k for k, v in constants.items()}
 
     new_constant = 0
-    reused_ptrs = defaultdict(list)
 
     known_aliases = set()
 
@@ -279,7 +302,8 @@ def label_pointers(ops_dict):
             if arg_or_ret in ptr_addr_to_name:
                 arg_or_ret_name = ptr_addr_to_name[arg_or_ret]
             else:
-                raise "wtf"
+                warnings.warn(f"couldn't identify arg: {arg_or_ret} to call {call['op_id']}")
+                return None
         else:
             parent_args_idx = next(
                 i
@@ -317,9 +341,17 @@ def label_pointers(ops_dict):
             ):
                 assert (ptr_addr_to_name[arg_or_ret], arg_or_ret_name) in known_aliases
             else:
-                raise "wtf"
+                raise Exception("wtf")
 
         return arg_or_ret_name
+
+    constants = ops_dict["constants"]
+    constants_to_names = {}
+    for k, v in constants.items():
+        if isinstance(v, list):
+            v = tuple(v)
+        constants[k] = v
+        constants_to_names[v] = k
 
     def percolate(this_calls, parent_args_or_rets, parent_args_or_rets_names, rev):
         nonlocal new_constant, constants, constants_to_names
@@ -337,17 +369,26 @@ def label_pointers(ops_dict):
                 if isinstance(typ, ListType) and isinstance(
                         typ.getElementType(), TensorType
                 ):
-                    arg_or_retss = arg_or_ret
-                    arg_or_ret_name = []
-                    for arg_or_ret in arg_or_retss:
-                        arg_or_ret_name.append(
-                            handle_tensor(
-                                call,
-                                arg_or_ret,
-                                parent_args_or_rets,
-                                parent_args_or_rets_names,
-                            )
+                    if f"{args_or_rets} names" in call:
+                        arg_or_ret_name = call[f"{args_or_rets} names"][arg_or_ret_idx]
+                    else:
+                        arg_or_ret_name = handle_tensor(
+                            call,
+                            arg_or_ret,
+                            parent_args_or_rets,
+                            parent_args_or_rets_names,
                         )
+                    # arg_or_retss = arg_or_ret
+                    # arg_or_ret_name = []
+                    # for arg_or_ret in arg_or_retss:
+                    #     arg_or_ret_name.append(
+                    #         handle_tensor(
+                    #             call,
+                    #             arg_or_ret,
+                    #             parent_args_or_rets,
+                    #             parent_args_or_rets_names,
+                    #         )
+                    #     )
                 elif isinstance(typ, DictType):
                     arg_or_ret_name = parent_args_or_rets_names[0]
                 elif isinstance(typ, TensorType):
@@ -357,16 +398,16 @@ def label_pointers(ops_dict):
                         parent_args_or_rets,
                         parent_args_or_rets_names,
                     )
-                elif str(arg_or_ret) in constants_to_names:
-                    arg_or_ret_name = constants_to_names[str(arg_or_ret)]
+                elif arg_or_ret in constants_to_names:
+                    arg_or_ret_name = constants_to_names[arg_or_ret]
                 else:
                     if isinstance(arg_or_ret, str) and "tensor_ptr" in arg_or_ret:
-                        raise "wtf"
+                        raise Exception("wtf")
                     warnings.warn(f'new constant {call["op_id"]} {arg_or_ret}')
                     new_constant += 1
                     arg_or_ret_name = f"$new_constant_{new_constant}"
-                    constants[arg_or_ret_name] = str(arg_or_ret)
-                    constants_to_names[str(arg_or_ret)] = arg_or_ret_name
+                    constants[arg_or_ret_name] = arg_or_ret
+                    constants_to_names[arg_or_ret] = arg_or_ret_name
 
                 names[arg_or_ret_idx] = arg_or_ret_name
 
@@ -379,7 +420,7 @@ def label_pointers(ops_dict):
             this_args_or_rets = call[args_or_rets]
             this_args_or_rets_names = names
             if this_args_or_rets and not this_args_or_rets_names:
-                raise "wtf"
+                raise Exception("wtf")
             if this_args_or_rets and this_args_or_rets_names:
                 this_calls = call["calls"]
                 percolate(this_calls, this_args_or_rets, this_args_or_rets_names, rev)
@@ -397,7 +438,15 @@ def label_pointers(ops_dict):
     percolate(calls, returns, returns_names, rev=True)
     percolate(calls, args, args_names, rev=False)
 
+    # for k, v in constants.items():
+    #     if isinstance(v, list):
+    #         v = tuple(v)
+    #     constants[k] = v
+    #     constants_to_names[v] = k
+
     ops_dict["graph_top_trace"] = graph_top_trace
+    ops_dict["constants"] = constants
+    ops_dict["constants_to_names"] = constants_to_names
 
     return ops_dict
 
@@ -420,24 +469,27 @@ def flist_op(op):
     return op
 
 
-def stringify_type(op):
+def stringify_type(op, if_flist=False):
     def loop(vals, typs, names):
         for i, t in enumerate(typs):
-            typs[i] = str(typs[i].annotation_str)
+            if not isinstance(typs[i], str):
+                typs[i] = str(typs[i].annotation_str)
         for i, v in enumerate(vals):
             if "Device" in typs[i] and v is not None:
                 vals[i] = v.name
+            if isinstance(v, tuple):
+                vals[i] = list(v)
         for i, n in enumerate(names):
             if names[i] is not None:
                 names[i] = names[i].replace("$", "%")
 
     def _stringify_type(op):
-        del op["op_id"]
         if "caller_op_id" in op:
             del op["caller_op_id"]
         loop(op["args"], op["args types"], op.get("args names", []))
         loop(op["returns"], op["returns types"], op.get("returns names", []))
-        op = flist_op(op)
+        if if_flist:
+            op = flist_op(op)
         if op.get("calls") is None:
             op["calls"] = []
         for o in op["calls"]:
@@ -464,41 +516,85 @@ def match_allocs_to_outs(ops_dict):
     ptr_addr_to_name = ops_dict["ptr_addr_to_name"]
     id_to_op = ops_dict["id_to_op"]
     constants = ops_dict["constants"]
+    constants_to_names = ops_dict["constants_to_names"]
+    graph_args = ops_dict["graph"]["$args"]
+    graph = ops_dict["graph"]
+
     alloc_ptr_to_alloc = {
         f"tensor_ptr_{a['addr']}": id_to_op[a["op_id"]]
         for a in ops_dict["allocations_list"]
         if a["fn_name"] == "allocate"
     }
-    # outs = ops_dict["outs"]
     allocs = {}
-    for ptr, fn_name in ptr_addr_to_name.items():
+    for ptr, ptr_name in ptr_addr_to_name.items():
         if alloc := alloc_ptr_to_alloc.get(ptr):
-            allocs[fn_name] = alloc
+            allocs[ptr_name] = alloc
 
     call_chains = defaultdict(list)
-    for fn_name, call in allocs.items():
+    qualified_call_chains = {}
+    for alloc_name, call in allocs.items():
         size = call["size"]
         while caller_op_id := call.get("caller_op_id"):
-            call_chains[fn_name].append(caller_op_id)
+            call_chains[alloc_name].append(caller_op_id)
             call = id_to_op[caller_op_id]
 
+        call_chains[alloc_name] = list(reversed(call_chains[alloc_name]))
+
+        call_chain = call_chains[alloc_name]
         qualified_call_chain = []
-        for op_id in reversed(call_chains[fn_name]):
-            if id_to_op[op_id]["schema"] != "no schema":
-                fn = f"{id_to_op[op_id]['fn_name']}({{}})"
+        op = id_to_op[call_chain[1]]
+        if len(op["returns names"]) == 1 and op["returns names"][0] in graph:
+            out_name = op["returns names"][0]
+            full_call = graph[out_name]
+            qualified_call_chain.append(f"{out_name}: {full_call.replace('$', '%')}")
+
+        for op_id in call_chain[2:]:
+            op = id_to_op[op_id]
+            # if op["schema"] != "no schema":
+            #     fn = f"{op['fn_name']}({{}})"
+            # arg_names = []
+            # for i, arg in enumerate(op["args"]):
+            #     if not isinstance(arg, str):
+            #         if (
+            #             isinstance(arg, tuple)
+            #             and isinstance(op["args types"][i], ListType)
+            #             and isinstance(
+            #                 op["args types"][i].getElementType(), TensorType
+            #             )
+            #         ):
+            #             arg_names.append(op["args names"][i])
+            #         else:
+            #             assert arg in constants_to_names
+            #             arg_names.append(constants_to_names[arg])
+            #     elif "tensor_ptr" in arg:
+            #         if arg in ptr_addr_to_name:
+            #             ptr_name = ptr_addr_to_name[arg]
+            #             if ptr_name in allocs:
+            #                 arg_names.append(ptr_name)
+            #             else:
+            #                 assert ptr_name in constants or ptr_name in graph_args
+            #                 arg_names.append(ptr_name)
+            #         else:
+            #             assert "empty_tensor" in arg
+            #             arg_names.append(arg)
+            #     else:
+            #         arg_names.append(arg)
+            # qualified_call_chain.append(fn.format(", ".join(arg_names)))
+
+            if op["schema"] != "no schema":
+                fn = f"{op['fn_name']}({{}})"
                 args = []
-                for arg in id_to_op[op_id]["args"]:
+                for arg in op["args"]:
                     if not isinstance(arg, str):
+                        if isinstance(arg, tuple):
+                            arg = list(arg)
                         args.append(str(arg))
                     elif "tensor_ptr" in arg:
                         if arg in ptr_addr_to_name:
-                            name = ptr_addr_to_name[arg]
+                            name = ptr_addr_to_name[arg].replace("$", "%")
                             if name in allocs:
-                                args.append(
-                                    # "ptr_" + str(allocs[name]['size'])
-                                    name
-                                )
-                            elif fn_name in constants:
+                                args.append(name)
+                            elif alloc_name in constants:
                                 args.append(name)
                         else:
                             assert "empty_tensor" in arg
@@ -507,36 +603,83 @@ def match_allocs_to_outs(ops_dict):
                         args.append(arg)
                 qualified_call_chain.append(fn.format(", ".join(args)))
         qualified_call_chain.append(f"allocate({size})")
-        call_chains[fn_name] = qualified_call_chain
+        qualified_call_chains[alloc_name] = qualified_call_chain
 
-    assert len(call_chains) == len(allocs)
-    assert set(call_chains.keys()) == set(allocs.keys())
+    assert len(qualified_call_chains) == len(allocs)
+    assert set(qualified_call_chains.keys()) == set(allocs.keys())
+
+    grouped_allocs = defaultdict(list)
     unique_call_chains = defaultdict(list)
-    for k, v in call_chains.items():
+    for k, v in qualified_call_chains.items():
+        grouped_allocs[v[0]].append(k)
         unique_call_chains[tuple(v)].append(k)
+
+    def find_all_frees(op):
+        if op["fn_name"] == "free":
+            res = [op["addr"]]
+        else:
+            res = []
+        for call in ls_or_empty(op, "calls"):
+            res.extend(find_all_frees(call))
+        return res
+
+    outs = ops_dict["outs"]
     if len(unique_call_chains) != len(allocs):
-        for c, ks in {
-            c: ks for c, ks in unique_call_chains.items() if len(ks) > 1
+        for chain, alloc_names in {
+            chain: alloc_names
+            for chain, alloc_names in unique_call_chains.items()
+            if len(alloc_names) > 1
         }.items():
-            print(c, ks)
-            for k in ks:
-                pprint((k, allocs[k]["addr"], allocs[k]["size"]))
+            # assert that these allocs don't escape
+            for alloc_name in alloc_names:
+                assert "alloc" in alloc_name
+                assert alloc_name not in outs
+                alloc = allocs[alloc_name]
+                root_caller_op_id = call_chains[alloc_name][-2]  # -1 is the model name
+                root_caller = id_to_op[root_caller_op_id]
+                all_frees = find_all_frees(root_caller)
+                assert alloc["addr"] in all_frees
 
     sorted_call_chain = {}
     name_order = ops_dict["name_order"]
-    for name, chain in sorted(call_chains.items(), key=lambda name_chain: name_order[name_chain[0]]):
-        sorted_call_chain[name] = chain
-    return sorted_call_chain, allocs
+    for ptr_name, chain in sorted(
+            qualified_call_chains.items(), key=lambda name_chain: name_order[name_chain[0]]
+    ):
+        sorted_call_chain[ptr_name] = chain
+
+    return sorted_call_chain, dict(grouped_allocs), allocs
 
 
-def print_call_chains(call_chains, output_allocs, file_name):
-    # for name, call_chain in call_chains.items():
-    #     call_chains[name] = flist(call_chain)
+def print_call_chains(call_chains, grouped_allocs, output_allocs, file_name):
+    call_chains = {k.replace("$", "%"): v for k,v in call_chains.items()}
+    grouped_allocs = {k.replace("$", "%"): v for k,v in grouped_allocs.items()}
+    output_allocs = {k.replace("$", "%"): v for k,v in output_allocs.items()}
+
     for name, output_alloc in output_allocs.items():
-        output_allocs[name] = stringify_type(output_alloc)
+        output_allocs[name] = stringify_type(output_alloc, if_flist=False)
+
+    with open(f"call_chains/{file_name}.json", "w") as f:
+        json.dump(
+            {
+                "call_chains": call_chains,
+                "grouped_allocs": grouped_allocs,
+                "output_allocs": output_allocs,
+            },
+            f, indent=2
+        )
+
+    for name, output_alloc in output_allocs.items():
+        output_allocs[name] = stringify_type(output_alloc, if_flist=True)
 
     with open(f"call_chains/{file_name}.yml", "w") as f:
-        yaml.dump({"call_chains": call_chains, "output_allocs": output_allocs}, f)
+        yaml.dump(
+            {
+                "call_chains": call_chains,
+                "grouped_allocs": grouped_allocs,
+                "output_allocs": output_allocs,
+            },
+            f,
+        )
 
 
 def find_final_dispatch(ops_dict):
@@ -570,16 +713,17 @@ def list_all_ops(profiles_fp):
 
 
 def main(model_name):
+    fix_yaml(model_name)
     print(model_name)
     ops_dict = load_ops_yaml(model_name)
-    ops_dict = parse_ops_dict(ops_dict)
-    ops_dict = label_pointers(ops_dict)
-    call_chains, output_allocs = match_allocs_to_outs(ops_dict)
-    print_call_chains(call_chains, output_allocs, model_name)
+    # ops_dict = parse_ops_dict(ops_dict)
+    # ops_dict = label_pointers(ops_dict)
+    # sorted_call_chain, grouped_allocs, allocs = match_allocs_to_outs(ops_dict)
+    # print_call_chains(sorted_call_chain, grouped_allocs, allocs, model_name)
 
 
-def fix_yaml(fp):
-    f = open(fp, "r+")
+def fix_yaml(model_name):
+    f = open(f"profiles/{model_name}.yml", "r+")
     f_lines = f.readlines()
     print(f_lines[0])
     gr = f_lines[0]
@@ -612,15 +756,28 @@ def fix_yaml(fp):
 # print(result.get(timeout=1))        # raises multiprocessing.TimeoutError
 
 if __name__ == "__main__":
-    # for i, fp in enumerate(glob.glob("profiles/*.yml")):
+    # with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+    #     for i, fp in enumerate(glob.glob("profiles/*.yml")):
+    #         model_name = os.path.splitext(os.path.split(fp)[-1])[-2]
+    #         if "alexnet.x" not in model_name: continue
+    #         fix_yaml(model_name)
+    #         pool.apply_async(with_log, (main, model_name))
+    #     pool.close()
+    #     pool.join()
 
-    with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
-        for i, fp in enumerate(glob.glob("profiles/*.yml")):
-            fix_yaml(fp)
-            model_name = os.path.splitext(os.path.split(fp)[-1])[-2]
-            pool.apply_async(with_log, (main, model_name))
-        pool.close()
-        pool.join()
+    for i in range(1, 11):
+        ops_dict = load_ops_yaml(f"alexnet.x{i}")
+        for j, alloc in enumerate(ops_dict["allocations_list"]):
+            del alloc["op_id"]
+            del alloc["addr"]
+            ops_dict["allocations_list"][j] = tuple(map(str, alloc.values()))
+
+        c = Counter(ops_dict["allocations_list"])
+        print(i, c)
+
+
+        #     alexnets[i] = json.load(open(f"call_chains/alexnet.x{i}.json"))
+    # print(alexnets)
     # for i, fp in enumerate(glob.glob("profiles/*.yml")):
     #     model_name = os.path.splitext(os.path.split(fp)[-1])[-2]
     #     main(model_name)
