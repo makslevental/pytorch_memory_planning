@@ -1,9 +1,10 @@
 import json
 import sys
-from collections import namedtuple, defaultdict, deque
+from collections import defaultdict, deque, namedtuple
 from dataclasses import dataclass
 from enum import Enum
-from functools import partial, total_ordering
+from functools import partial
+from operator import itemgetter
 from pprint import pprint
 from typing import List, Dict
 
@@ -41,24 +42,17 @@ def overlap(a, b, c, d):
     interval_len_2 = d - c
 
     if not valid_add(interval_len_1, interval_len_2) or not valid_sub(
-            outer_len, interval_len_1 + interval_len_2
+        outer_len, interval_len_1 + interval_len_2
     ):
         return True
     else:
         return False
 
 
-@total_ordering
-@dataclass
+@dataclass(repr=True, eq=True, order=True, unsafe_hash=False, frozen=True)
 class LiveRange:
     begin: int
     end: int
-
-    def __eq__(self, other):
-        return self.begin == other.begin and self.end == other.end
-
-    def __lt__(self, other):
-        return self.begin < other.begin and self.end < other.begin
 
     def __len__(self):
         return self.end - self.begin + 1
@@ -66,21 +60,11 @@ class LiveRange:
     def overlap(self, other):
         return overlap(self.begin, self.end + 1, other.begin, other.end + 1)
 
-    def __str__(self):
-        return f"{(self.begin, self.end)}"
 
-
-@total_ordering
-@dataclass
+@dataclass(repr=True, eq=True, order=True, unsafe_hash=False, frozen=True)
 class MemRegion:
     offset: int
     size: int
-
-    def __eq__(self, other):
-        return self.offset == other.begin and self.size == other.end
-
-    def __lt__(self, other):
-        return self.offset < other.begin and self.size < other.begin
 
     def __len__(self):
         return self.size - self.offset + 1
@@ -93,9 +77,6 @@ class MemRegion:
     @property
     def next_free_addr(self):
         return self.offset + self.size
-
-    def __str__(self):
-        return f"{(self.offset, self.size)}"
 
 
 import hashlib
@@ -117,7 +98,7 @@ class RequiredAlloc:
         return int(hashlib.sha256(str(self).encode("utf-8")).hexdigest(), 16) % 10 ** 8
 
 
-@dataclass
+@dataclass(eq=True, unsafe_hash=False, frozen=True)
 class PlannedAlloc:
     lvr: LiveRange
     mem_region: MemRegion
@@ -142,11 +123,11 @@ class GapPriority(Enum):
 
 
 def find_gap(
-        record: RequiredAlloc,
-        current_allocs: Dict[str, PlannedAlloc],
-        interval_tree: NCLS,
-        *,
-        GAP_PRIORITY: GapPriority = GapPriority.SMALLEST,
+    record: RequiredAlloc,
+    current_allocs: Dict[str, PlannedAlloc],
+    interval_tree: NCLS,
+    *,
+    GAP_PRIORITY: GapPriority = GapPriority.SMALLEST,
 ):
     best_gap = float("inf")
     best_offset = None
@@ -177,8 +158,8 @@ def find_gap(
 
 
 def _greedy_by_size(
-        sorted_req_mem_allocs: List[RequiredAlloc],
-        gap_finder,
+    sorted_req_mem_allocs: List[RequiredAlloc],
+    gap_finder,
 ):
     current_allocs: Dict[str, PlannedAlloc] = {}
     interval_tree = IntervalTree.from_tuples(
@@ -196,9 +177,9 @@ def _greedy_by_size(
 
 
 def greedy_by_size(
-        req_mem_allocs: List[RequiredAlloc],
-        *,
-        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
+    req_mem_allocs: List[RequiredAlloc],
+    *,
+    gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
 ):
     print("greedy by size", file=sys.stderr)
     # biggest size first but break ties deterministically
@@ -207,9 +188,9 @@ def greedy_by_size(
 
 
 def greedy_by_longest(
-        req_mem_allocs: List[RequiredAlloc],
-        *,
-        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
+    req_mem_allocs: List[RequiredAlloc],
+    *,
+    gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.SMALLEST),
 ):
     print("greedy by longest", file=sys.stderr)
     req_mem_allocs.sort(key=lambda r: (len(r.lvr), r.lvr), reverse=True)
@@ -225,20 +206,20 @@ def save_planned_allocs(allocs: List[PlannedAlloc], name):
 MemEvent = namedtuple("MemEvent", "ptr_addr size ts")
 
 
-@dataclass
-class MemEvent:
-    ptr_addr: str
-    size: int
-    ts: int
-
-    # def __str__(self):
-    #     return f"{self.ts}:{self.size}"
-    #
-    # def __repr__(self):
-    #     return str(self)
-
-    def __hash__(self):
-        return int(hashlib.sha256(str(self).encode("utf-8")).hexdigest(), 16) % 10 ** 8
+# @dataclass
+# class MemEvent:
+#     ptr_addr: str
+#     size: int
+#     ts: int
+#
+#     # def __str__(self):
+#     #     return f"{self.ts}:{self.size}"
+#     #
+#     # def __repr__(self):
+#     #     return str(self)
+#
+#     def __hash__(self):
+#         return int(hashlib.sha256(str(self).encode("utf-8")).hexdigest(), 16) % 10 ** 8
 
 
 def solve_z3():
@@ -253,7 +234,17 @@ def solve_z3():
     print(o.model())
 
 
-def bump_allocator(mem_events: List[MemEvent]):
+def make_mem_events_from_required_allocs(reqs: List[RequiredAlloc]) -> List[MemEvent]:
+    mem_events = {}
+    for req in reqs:
+        mem_events[req.lvr.begin] = MemEvent(req.ptr_addr, req.size, req.lvr.begin)
+        mem_events[req.lvr.end] = MemEvent(req.ptr_addr, -req.size, req.lvr.end)
+
+    return [m[1] for m in sorted(mem_events.items(), key=itemgetter(0))]
+
+
+def bump_allocator(req_mem_allocs: List[RequiredAlloc]) -> List[PlannedAlloc]:
+    mem_events = make_mem_events_from_required_allocs(req_mem_allocs)
     print("bump_allocator", file=sys.stderr)
     mem_events.sort(key=lambda r: r.ts)
     planned_allocations: Dict[str, PlannedAlloc] = {}
@@ -268,9 +259,12 @@ def bump_allocator(mem_events: List[MemEvent]):
             curr_allocs += 1
         elif size < 0:
             assert ptr_addr in planned_allocations
-            assert planned_allocations[ptr_addr].mem_region.size == -size
-            assert planned_allocations[ptr_addr].lvr.begin < ts
-            planned_allocations[ptr_addr].lvr.end = ts
+            p_alloc = planned_allocations[ptr_addr]
+            assert p_alloc.mem_region.size == -size
+            assert p_alloc.lvr.begin < ts
+            planned_allocations[ptr_addr] = PlannedAlloc(
+                LiveRange(p_alloc.lvr.begin, ts), p_alloc.mem_region
+            )
             curr_allocs -= 1
         if curr_allocs == 0:
             next_offset = 0
@@ -296,7 +290,7 @@ def greedy_color(G, order):
     return color
 
 
-def gergov(required_allocs: List[RequiredAlloc]):
+def gergov(required_allocs: List[RequiredAlloc]) -> List[PlannedAlloc]:
     print("gergov", file=sys.stderr)
     H = {
         (
@@ -489,7 +483,7 @@ def mincost_flow(required_allocs: List[RequiredAlloc]):
     return planned_allocs
 
 
-def solve_cp(required_allocs: List[RequiredAlloc]):
+def solve_csp(required_allocs: List[RequiredAlloc]):
     model = cp_model.CpModel()
 
     max_size = sum(r.size for r in required_allocs)
@@ -557,7 +551,7 @@ def solve_mip(required_allocs: List[RequiredAlloc]):
     # and z_ij = 1 if the converse offset_j + mem_j <= offset_i
     # (note there could be a gap if we stick a block in between them
     for i, r1 in enumerate(required_allocs):
-        for j, r2 in enumerate(required_allocs[i + 1:], start=i + 1):
+        for j, r2 in enumerate(required_allocs[i + 1 :], start=i + 1):
             if r1.lvr.overlap(r2.lvr):
                 inters = solver.IntVar(0.0, 1, f"inters_{{{i},{j}}}")
                 # if z_ij = 0 then i < j then offsets[i] + mems[i] <= offsets[j]
@@ -627,7 +621,7 @@ def verify_allocation(allocations):
             if i == j:
                 continue
             if alloc1.overlap(alloc2):
-                print(alloc1, alloc2)
+                # print("invalid", alloc1, alloc2)
                 return False
     return True
 
@@ -702,11 +696,7 @@ if __name__ == "__main__":
         for i, ((begin, end), size) in enumerate(LSTM_lvrs.items())
     ]
 
-    trace_json = json.load(
-        open(
-            "/home/mlevental/dev_projects/pytorch_memory_planning/traces/resnet18,1x3x128x128.json"
-        )
-    )
+    trace_json = json.load(open("traces/resnet18,1x3x128x128.json"))
     req_mem_allocs = get_required_mem_allocs(trace_json)
 
     res = gergov(req_mem_allocs)

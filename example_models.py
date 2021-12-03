@@ -1,11 +1,13 @@
 import inspect
 
 import torch
+
 # from torchvision import models
 # from torchvision.models.segmentation import deeplabv3_resnet50
 from torch import nn
-from torch.nn import functional as F
 from torch._C._autograd import DeviceType
+from torch.nn import functional as F
+
 # from torchvision import models
 # from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_resnet101
 # from transformers import BertTokenizer, BertModel, BertConfig
@@ -178,12 +180,8 @@ def _vision_models():
     modelss = dict(inspect.getmembers(models, inspect.isfunction))
     detection_models = models.detection
     segmentation_models = models.segmentation
-    modelss.update(
-        dict(inspect.getmembers(detection_models, inspect.isfunction))
-    )
-    modelss.update(
-        dict(inspect.getmembers(segmentation_models, inspect.isfunction))
-    )
+    modelss.update(dict(inspect.getmembers(detection_models, inspect.isfunction)))
+    modelss.update(dict(inspect.getmembers(segmentation_models, inspect.isfunction)))
     return modelss
 
 
@@ -212,6 +210,7 @@ class Net(nn.Module):
         x = self.fc3(x)
         return x
 
+
 def make_toy_model():
     x = torch.rand((1, 3, 32, 32))
 
@@ -219,6 +218,7 @@ def make_toy_model():
     model.eval()
     y = torch.jit.trace(model, (x,), strict=False)
     y.save(f"models/toy_model.pt")
+
 
 def make_all_vision_models():
     modelss = _vision_models()

@@ -138,14 +138,15 @@ dmypy.json
 cython_debug/
 
 .idea
+benchmarks
+call_chains
+je_malloc_runs
+jemalloc_plots
+logs
 memory_maps
 models
-traces
+perf_records
 planned_allocs
-je_malloc_runs
+profiles
 req_allocs
 symbolic_models
-jemalloc_plots
-perf_records
-profiles
-call_chains

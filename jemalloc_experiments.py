@@ -1,25 +1,18 @@
 import argparse
-import time
-
-import torch
-from example_models import vision_models
 import ast
-import ctypes
 import os
 from collections import defaultdict
 from multiprocessing import Process
+from multiprocessing.pool import ThreadPool
 from threading import Thread
 from typing import Dict
-from random import randint
-from time import sleep
-import multiprocessing as mp
-from multiprocessing.pool import ThreadPool
 
-from profile_models import profile_model
+import torch
 
 
 def test_je_malloc(N):
     import jemalloc_bindings
+
     allocs = []
     for i in range(N):
         allocs.append(jemalloc_bindings.je_malloc(i))
@@ -50,6 +43,7 @@ def parse_reqs(fp):
 
 def make_req_mem_allocs_with_print_stats(allocs: Dict, frees: Dict, idx_ts):
     import jemalloc_bindings
+
     stats = []
     ptrs = {}
     for i, ts in idx_ts:
@@ -68,6 +62,7 @@ def make_req_mem_allocs_with_print_stats(allocs: Dict, frees: Dict, idx_ts):
 
 def make_req_mem_allocs(allocs: Dict, frees: Dict, idx_ts):
     import jemalloc_bindings
+
     ptrs = {}
     for i, ts in idx_ts:
         for (alloc_sz, ptr_addr) in allocs.get(ts, []):
@@ -88,6 +83,7 @@ def make_lots_of_reqs(allocs: Dict, frees: Dict, idx_ts, num_loops):
 
 def print_je_malloc_stats(name):
     import jemalloc_bindings
+
     dir = f"je_malloc_runs/{name}/"
     if not os.path.isdir(dir):
         os.mkdir(dir)
@@ -99,13 +95,12 @@ def print_je_malloc_stats(name):
 
 def set_num_background_threads(n):
     import jemalloc_bindings
+
     jemalloc_bindings.set_num_background_threads(n)
 
 
 def record_lots_of_reqs(name, num_workers, num_loops, threaded):
-    allocs, frees, idx_ts = parse_reqs(
-        f"/home/mlevental/dev_projects/pytorch_memory_planning/req_allocs/{name}.txt"
-    )
+    allocs, frees, idx_ts = parse_reqs(f"req_allocs/{name}.txt")
     workers = []
     for i in range(num_workers):
         if threaded:
@@ -126,9 +121,7 @@ def record_lots_of_reqs(name, num_workers, num_loops, threaded):
 
 
 def heap_profile(name):
-    allocs, frees, idx_ts = parse_reqs(
-        f"/home/mlevental/dev_projects/pytorch_memory_planning/req_allocs/{name}.txt"
-    )
+    allocs, frees, idx_ts = parse_reqs(f"req_allocs/{name}.txt")
     dir = f"je_malloc_runs/{name}/"
     if not os.path.isdir(dir):
         os.mkdir(dir)
@@ -139,9 +132,7 @@ def heap_profile(name):
     stats.extend(make_req_mem_allocs_with_print_stats(allocs, frees, idx_ts))
     with open(f"{dir}/heap_profile.csv", "w") as csv:
         csv.write("allocated,active,metadata,resident,mapped,retained\n")
-        csv.write('\n'.join(stats) + '\n')
-
-
+        csv.write("\n".join(stats) + "\n")
 
 
 def torch_jemalloc(name, worker):
@@ -169,10 +160,6 @@ def narena_torch_jemalloc(name, num_workers):
 
 
 if __name__ == "__main__":
-    # sh_obj = ctypes.cdll.LoadLibrary(
-    #     "/home/mlevental/dev_projects/pytorch_memory_planning/cpp_src/cmake-build-debug/runtime_patch/libruntime_patch.so")
-    # torch._C._jit_pass_installHugePagesAllocator()
-    # torch._C._jit_pass_installOversizeAllocator()
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("name", type=str)
     parser.add_argument("--narenas", type=str, default=257)
@@ -191,11 +178,13 @@ if __name__ == "__main__":
 
     model_pts = set()
     for (dirpath, dirnames, filenames) in os.walk("models"):
-        model_pts.update([f.replace('.pt', '') for f in filenames])
+        model_pts.update([f.replace(".pt", "") for f in filenames])
         break
 
     if name in model_pts:
-        print(f"{name=}, {narenas=}, {num_workers=}, {num_loops=}, {threaded=}, {do_heap_profile=}")
+        print(
+            f"{name=}, {narenas=}, {num_workers=}, {num_loops=}, {threaded=}, {do_heap_profile=}"
+        )
         narena_torch_jemalloc(name, num_workers)
     # model = vision_models(name).eval()
     # main()

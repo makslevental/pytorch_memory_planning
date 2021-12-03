@@ -332,27 +332,6 @@ def check_shape_forward(
         ), "kernel size can't be bigger than input size"
 
 
-# graph(%self : __torch__.torchvision.models.inception.___torch_mangle_103.Inception3,
-#       %x.1 : Tensor(SS(-25), SS(-26), SS(-27), SS(-28))):
-#   %4158 : int[] = prim::Constant[value=[1, 0]]()
-#   %4157 : int[] = prim::Constant[value=[0, 1]]()
-#   %4156 : int[] = prim::Constant[value=[3, 0]]()
-#   %4155 : int[] = prim::Constant[value=[0, 3]]()
-#   %4154 : int[] = prim::Constant[value=[3, 3]]()
-#   %4153 : int[] = prim::Constant[value=[1, 1]]()
-#   %4152 : int[] = prim::Constant[value=[0, 0]]()
-#   %4151 : int[] = prim::Constant[value=[2, 2]]()
-#   %58 : int = prim::Constant[value=-1]()
-#   %15 : int = prim::Constant[value=1]() # /home/mlevental/miniconda3/envs/pytorch_shape_inference_memory_planning/lib/python3.8/site-packages/torchvision-0.12.0a0+dbb7679-py3.8-linux-x86_64.egg/torchvision/models/inception.py:131:45
-#   %self.aux_logits : bool = prim::Constant[value=1]()
-#   %self.fc.bias : Float(1000, strides=[1], requires_grad=0, device=cpu) = prim::Constant[value=<Tensor>]()
-#   %self.fc.weight : Float(1000, 2048, strides=[2048, 1], requires_grad=0, device=cpu) = prim::Constant[value=<Tensor>]()
-#   %self.Conv2d_1a_3x3.conv.bias : NoneType = prim::Constant()
-#   %self.transform_input : bool = prim::Constant[value=0]()
-#   %self.Conv2d_1a_3x3.conv.weight_fused_bn : Float(32, 3, 3, 3, strides=[27, 9, 3, 1], requires_grad=0, device=cpu) = prim::Constant[value=<Tensor>]()
-#   %self.Conv2d_1a_3x3.conv.bias_fused_bn.1 : Float(32, strides=[1], requires_grad=0, device=cpu) = prim::Constant[value=<Tensor>]()
-#   %x.46 : Tensor(SS(-25), 32, SS(-29), SS(-30)) = aten::conv2d(%x.1, %self.Conv2d_1a_3x3.conv.weight_fused_bn, %self.Conv2d_1a_3x3.conv.bias_fused_bn.1, %4151, %4152, %4153, %15) # /home/mlevental/dev_projects/pytorch_19/torch/nn/modules/conv.py:443:15
-
 # this is not handling transposed convolution yet
 def conv_output_size(
     input_size: List[int],

@@ -1,111 +1,88 @@
-import ctypes
+import glob
+import multiprocessing
 import os
+import time
 from functools import partial
+from itertools import chain
+from typing import List
 
-from plotting import plot_results
+from memory_observer import (
+    load_ops_yaml,
+    export_memory_reqs,
+    get_call_chains,
+    parse_ops_dict,
+    with_log,
+)
 from profile_models import (
     analyze_model,
 )
 from strategies import (
     greedy_by_size,
     bump_allocator,
-    solve_cp,
-    calculate_high_watermark,
-    gergov,
-    mincost_flow,
+    solve_csp,
     greedy_by_longest,
     find_gap,
     GapPriority,
+    verify_allocation,
+    PlannedAlloc, mincost_flow, gergov,
 )
 
 
-def plan_greedy_strats(req_mem_allocs, name):
-    # planned_allocs = greedy_by_size(req_mem_allocs)
-    # print("greedy_by_size_with_smallest_gap valid", verify_allocation(planned_allocs), flush=True)
-    # print(f"{name}", "Greedy by Size", calculate_high_watermark(planned_allocs), sep=",", flush=True)
-    # make_memory_map(planned_allocs, f"{name}.greedy_by_size_with_smallest_gap")
+class Timer:
+    def __init__(self, model, strategy):
+        self.model = model
+        self.strategy = strategy
 
-    planned_allocs = greedy_by_size(
-        req_mem_allocs, gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST)
-    )
-    print(
-        f"{name}",
-        "greedy_by_size_with_first_gap",
-        calculate_high_watermark(planned_allocs),
-        sep=",",
-        flush=True,
-    )
-    # make_memory_map(planned_allocs, f"{name}.greedy_by_size_with_first_gap")
+    def __enter__(self):
+        self.start = time.monotonic()
 
-    # planned_allocs = greedy_by_longest(req_mem_allocs)
-    # print(f"{name}", "Greedy by Longest", calculate_high_watermark(planned_allocs), sep=",", flush=True)
-    # make_memory_map(planned_allocs, f"{name}.greedy_by_longest_with_smallest_gap")
-
-    planned_allocs = greedy_by_longest(
-        req_mem_allocs, gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST)
-    )
-    print(
-        f"{name}",
-        "greedy_by_longest_with_first_gap",
-        calculate_high_watermark(planned_allocs),
-        sep=",",
-        flush=True,
-    )
-    # make_memory_map(planned_allocs, f"{name}.greedy_by_longest_with_first_gap")
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        end = time.monotonic()
+        print(self.model, self.strategy, end - self.start, flush=True)
 
 
-def plan_integer_programming_starts(req_mem_allocs, name):
-    planned_allocs = solve_cp(req_mem_allocs)
-    # print("solve_cp valid", verify_allocation(planned_allocs), flush=True)
-    # print(f"{name}", "Symbolic CSP", calculate_high_watermark(planned_allocs), sep=",", flush=True)
-    print(
-        f"{name}",
-        "Symbolic MIP",
-        calculate_high_watermark(planned_allocs),
-        sep=",",
-        flush=True,
-    )
-    # make_memory_map(planned_allocs, f"{name}.solve_cp")
+def plan_greedy_strats(req_mem_allocs, model_name):
+    with Timer(model_name, "greedy_by_size_smallest_gap") as _:
+        greedy_by_size_smallest_gap = greedy_by_size(req_mem_allocs)
+    with Timer(model_name, "greedy_by_size_first_gap") as _:
+        greedy_by_size_first_gap = greedy_by_size(req_mem_allocs,
+                                                  gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST))
+    with Timer(model_name, "greedy_by_longest_smallest_gap") as _:
+        greedy_by_longest_smallest_gap = greedy_by_longest(req_mem_allocs)
+    with Timer(model_name, "greedy_by_longest_first_gap") as _:
+        greedy_by_longest_first_gap = greedy_by_longest(req_mem_allocs,
+                                                        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST))
 
-    # planned_allocs = solve_mip(req_mem_allocs)
-    # # print("solve_mip valid", verify_allocation(planned_allocs), flush=True)
-    # print(f"{name}", "Symbolic MIP", calculate_high_watermark(planned_allocs), sep=",", flush=True)
-    # make_memory_map(planned_allocs, f"{name}.solve_mip")
+    return {
+        "greedy_by_size_smallest_gap": greedy_by_size_smallest_gap,
+        "greedy_by_size_first_gap": greedy_by_size_first_gap,
+        "greedy_by_longest_smallest_gap": greedy_by_longest_smallest_gap,
+        "greedy_by_longest_first_gap": greedy_by_longest_first_gap,
+    }
 
 
-def plan_other(req_mem_allocs, mem_events, name):
-    planned_allocs = bump_allocator(mem_events)
-    # print("bump valid", verify_allocation(planned_allocs), flush=True)
-    print(
-        f"{name}",
-        "Bump Allocator",
-        calculate_high_watermark(planned_allocs),
-        sep=",",
-        flush=True,
-    )
-    # make_memory_map(planned_allocs, f"{name}.bump")
+def plan_programming_starts(req_mem_allocs, model_name):
+    with Timer(model_name, "csp"):
+        csp = solve_csp(req_mem_allocs)
 
-    planned_allocs = mincost_flow(req_mem_allocs)
-    # print("mincost_flow valid", verify_allocation(planned_allocs), flush=True)
-    print(
-        f"{name}",
-        "Min-cost Flow",
-        calculate_high_watermark(planned_allocs),
-        sep=",",
-        flush=True,
-    )
-    # make_memory_map(planned_allocs, f"{name}.mincost_flow")
+    return {
+        "csp": csp,
+        # "mip": solve_mip(req_mem_allocs),
+    }
 
-    planned_allocs = gergov(req_mem_allocs)
-    # print("gergov valid", verify_allocation(planned_allocs), flush=True)
-    print(
-        f"{name}",
-        "Gergov",
-        calculate_high_watermark(planned_allocs),
-        sep=",",
-        flush=True,
-    )
-    # make_memory_map(planned_allocs, f"{name}.gergov")
+
+def plan_other_strats(req_mem_allocs, model_name):
+    with Timer(model_name, "bump"):
+        bump = bump_allocator(req_mem_allocs)
+    with Timer(model_name, "mincost_flow"):
+        flow = mincost_flow(req_mem_allocs)
+    with Timer(model_name, "gergov"):
+        gerg = gergov(req_mem_allocs)
+    return {
+        "bump": bump,
+        "mincost_flow": flow,
+        "gergov": gerg,
+    }
 
 
 def make_maps(model, x, name):
@@ -117,27 +94,70 @@ def make_maps(model, x, name):
     # print("len req_mem_allocs", len(req_mem_allocs))
 
     plan_greedy_strats(req_mem_allocs, name)
-    plan_integer_programming_starts(req_mem_allocs, name)
-    plan_other(req_mem_allocs, mem_events, name)
+    plan_programming_starts(req_mem_allocs, name)
+    plan_other_strats(req_mem_allocs, name)
+
+
+def maybe_make_dir(dir):
+    if not os.path.isdir(dir):
+        os.mkdir(dir)
+
+
+def make_planned_allocs_csv(model_name, params):
+    ops_dict = load_ops_yaml(f"{model_name}.{params}")
+    ops_dict = parse_ops_dict(ops_dict)
+    _, _, names_to_allocs = get_call_chains(ops_dict)
+    lvr_to_req_plus_root_caller = export_memory_reqs(ops_dict, names_to_allocs)
+    req_allocs = [req for _lvr, (req, _fn_name) in lvr_to_req_plus_root_caller.items()]
+    print(model_name, "num allocs", len(req_allocs), flush=True)
+
+    strats = []
+    strats.append(plan_greedy_strats(req_allocs, model_name))
+    if len(req_allocs) < 10000:
+        strats.append(plan_programming_starts(req_allocs, model_name))
+    strats.append(plan_other_strats(req_allocs, model_name))
+
+    for strat, plan in chain(*[s.items() for s in strats]):
+        plan: List[PlannedAlloc]
+        plan.sort(key=lambda p: p.lvr.begin)
+        if not verify_allocation(plan):
+            print(f"{model_name} {strat} memory plan not valid")
+        else:
+            maybe_make_dir(f"planned_allocs/{model_name}")
+            with open(f"planned_allocs/{model_name}/{strat}.{params}.csv", "w") as f:
+                for p_alloc in plan:
+                    root_caller = lvr_to_req_plus_root_caller[
+                        p_alloc.lvr
+                    ].root_caller_fn_name
+                    f.writelines(
+                        [
+                            f"{p_alloc.lvr.begin},{p_alloc.lvr.end},{p_alloc.mem_region.offset},{p_alloc.mem_region.size},{root_caller}\n"
+                        ]
+                    )
 
 
 if __name__ == "__main__":
-    for dir in ["models", "memory_maps", "traces"]:
+    for dir in [
+        "benchmarks",
+        "call_chains",
+        "je_malloc_runs",
+        "jemalloc_plots",
+        "logs" "memory_maps",
+        "models",
+        "perf_records",
+        "planned_allocs",
+        "profiles",
+        "req_allocs",
+        "symbolic_models",
+    ]:
         if not os.path.isdir(dir):
             os.mkdir(dir)
 
-    # with open('res.csv', 'w') as f:
-    #     with redirect_stdout(f):
-    #         print("model,dims,strategy,size")
-    #         for name, model in vision_models():
-    #             print(name, file=sys.stderr)
-    #             if name in {"small_bert", "large_bert", "attention_is_all_you_need"}:
-    #                 inp = make_bert_input()
-    #             else:
-    #                 inp = torch.rand((1, 3, 244, 244))
-    #             try:
-    #                 make_maps(model, inp, f"{name},1x3x244x244")
-    #             except Exception as e:
-    #                 print(name, e, file=sys.stderr)
-    plot_results("res.csv")
-    # hook_alloc_cpu()
+    with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+        for i, fp in enumerate(glob.glob("profiles/*.yml")):
+            _, fn = os.path.split(fp)
+            model_name, params, _yml = fn.split(".")
+            # make_planned_allocs_csv(model_name, params)
+            pool.apply_async(with_log, (make_planned_allocs_csv, (model_name, params)))
+        pool.close()
+        pool.join()

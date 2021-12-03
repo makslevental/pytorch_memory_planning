@@ -5,22 +5,20 @@ import os
 import re
 import sys
 from collections import defaultdict
-from contextlib import redirect_stdout, redirect_stderr
-from pprint import pprint
 from typing import List
 
 import numpy as np
-
 import torch
 from torch._C._autograd import ProfilerActivity
 from torch.profiler import profile
 
-from example_models import vision_models, make_resnets
+from example_models import vision_models
 from strategies import LiveRange, MemEvent, RequiredAlloc
 
 
 def register_op():
     from torch.utils import cpp_extension
+
     op_source = open("profile_models.cpp").read()
     cpp_extension.load_inline(
         name="prep_test_models",
@@ -34,6 +32,7 @@ def register_op():
 
 # register_op()
 
+
 def get_reqs_from_trace(name):
     trace_json = json.load(open(os.getcwd() + f"/traces/{name}.json"))
     req_mem_allocs = get_required_mem_allocs(trace_json)
@@ -43,10 +42,10 @@ def get_reqs_from_trace(name):
 
 def profile_model(model, x, trace_f_name):
     with profile(
-            activities=[ProfilerActivity.CPU],
-            profile_memory=True,
-            record_shapes=True,
-            with_stack=True,
+        activities=[ProfilerActivity.CPU],
+        profile_memory=True,
+        record_shapes=True,
+        with_stack=True,
     ) as prof:
         with torch.no_grad():
             model(x)
@@ -74,6 +73,7 @@ def analyze_model(model, x):
     torch._C._jit_pass_peephole(graph)
 
     req_allocs = []
+
     def make_alloc(node):
         for outp in node.outputs():
             users = [u.user.kind() for u in outp.uses()]
@@ -129,11 +129,7 @@ def analyze_model(model, x):
             ptr_addr = re.sub(f", scope:.*", "", ptr_addr)
             ptr_addr = re.sub(":.*=", "=", ptr_addr)
             req_allocs.append(
-                RequiredAlloc(
-                    LiveRange(start, end),
-                    int(np.prod(sizes)) * 4,
-                    ptr_addr
-                )
+                RequiredAlloc(LiveRange(start, end), int(np.prod(sizes)) * 4, ptr_addr)
             )
         else:
             print(node, model._get_name())
@@ -143,7 +139,7 @@ def analyze_model(model, x):
         node_to_idx = {node: i for i, node in enumerate(graph.nodes())}
         for node in graph.nodes():
             make_alloc(node)
-           
+
     mem_events = []
     for lvr in req_allocs:
         mem_events.append(MemEvent(lvr.ptr_addr, lvr.size, lvr.lvr.begin))
@@ -203,7 +199,9 @@ def dump_req_mem_allocs(reqs: List[RequiredAlloc], name):
 
 
 if __name__ == "__main__":
-    sh_obj = ctypes.cdll.LoadLibrary("/home/mlevental/dev_projects/pytorch_memory_planning/cpp_src/cmake-build-debug/runtime_patch/libruntime_patch.so")
+    sh_obj = ctypes.cdll.LoadLibrary(
+        "cpp_src/cmake-build-debug/runtime_patch/libruntime_patch.so"
+    )
     parser = argparse.ArgumentParser(description="")
     parser.add_argument("name", type=str)
     args = parser.parse_args()

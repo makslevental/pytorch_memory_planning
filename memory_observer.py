@@ -1,14 +1,16 @@
 import glob
 import json
-import multiprocessing
-import os
 import sys
+import time
 import traceback
 import warnings
-from collections import defaultdict, Counter
+from collections import defaultdict, namedtuple
 from pprint import pprint
+from typing import Dict, Tuple
 
 import ruamel.yaml
+
+from strategies import RequiredAlloc, LiveRange
 
 yaml = ruamel.yaml.YAML()
 yaml.width = 4096
@@ -35,6 +37,7 @@ def find_graph_top(ops_dict, model_name):
 
 
 def load_ops_yaml(model_name):
+    fix_yaml(model_name)
     import yaml
 
     with open(f"profiles/{model_name}.yml", "r") as stream:
@@ -43,11 +46,11 @@ def load_ops_yaml(model_name):
     return ops_dict
 
 
-def with_log(fn, model_name):
-    sys.stderr = open(f"logs/{model_name}.err", "a")
-    sys.stdout = open(f"logs/{model_name}.log", "a")
+def with_log(fn, args):
+    sys.stderr = open(f"logs/{'.'.join(args)}.err", "w")
+    # sys.stdout = open(f"logs/{'.'.join(args)}.log", "w")
     try:
-        fn(model_name)
+        fn(*args)
     except:
         traceback.print_exc()
 
@@ -183,7 +186,9 @@ def parse_ops_dict(ops_dict):
         for o in op["calls"]:
             o["caller_op_id"] = op["op_id"]
 
-    name_to_ptr = {name: arg for arg, name in zip(graph_top["args"], graph_top["args names"])}
+    name_to_ptr = {
+        name: arg for arg, name in zip(graph_top["args"], graph_top["args names"])
+    }
     for id, op in id_to_op.items():
         for i, name in enumerate(ls_or_empty(op, "returns names")):
             if isinstance(op["returns types"][i], TensorType):
@@ -302,7 +307,9 @@ def label_pointers(ops_dict):
             if arg_or_ret in ptr_addr_to_name:
                 arg_or_ret_name = ptr_addr_to_name[arg_or_ret]
             else:
-                warnings.warn(f"couldn't identify arg: {arg_or_ret} to call {call['op_id']}")
+                warnings.warn(
+                    f"couldn't identify arg: {arg_or_ret} to call {call['op_id']}"
+                )
                 return None
         else:
             parent_args_idx = next(
@@ -516,8 +523,8 @@ def match_allocs_to_outs(ops_dict):
     ptr_addr_to_name = ops_dict["ptr_addr_to_name"]
     id_to_op = ops_dict["id_to_op"]
     constants = ops_dict["constants"]
-    constants_to_names = ops_dict["constants_to_names"]
-    graph_args = ops_dict["graph"]["$args"]
+    # constants_to_names = ops_dict["constants_to_names"]
+    # graph_args = ops_dict["graph"]["$args"]
     graph = ops_dict["graph"]
 
     alloc_ptr_to_alloc = {
@@ -525,22 +532,20 @@ def match_allocs_to_outs(ops_dict):
         for a in ops_dict["allocations_list"]
         if a["fn_name"] == "allocate"
     }
-    allocs = {}
+    names_to_allocs = {}
     for ptr, ptr_name in ptr_addr_to_name.items():
         if alloc := alloc_ptr_to_alloc.get(ptr):
-            allocs[ptr_name] = alloc
+            names_to_allocs[ptr_name] = alloc
 
     call_chains = defaultdict(list)
     qualified_call_chains = {}
-    for alloc_name, call in allocs.items():
+    for alloc_name, call in names_to_allocs.items():
         size = call["size"]
         while caller_op_id := call.get("caller_op_id"):
             call_chains[alloc_name].append(caller_op_id)
             call = id_to_op[caller_op_id]
 
-        call_chains[alloc_name] = list(reversed(call_chains[alloc_name]))
-
-        call_chain = call_chains[alloc_name]
+        call_chain = list(reversed(call_chains[alloc_name]))
         qualified_call_chain = []
         op = id_to_op[call_chain[1]]
         if len(op["returns names"]) == 1 and op["returns names"][0] in graph:
@@ -592,7 +597,7 @@ def match_allocs_to_outs(ops_dict):
                     elif "tensor_ptr" in arg:
                         if arg in ptr_addr_to_name:
                             name = ptr_addr_to_name[arg].replace("$", "%")
-                            if name in allocs:
+                            if name in names_to_allocs:
                                 args.append(name)
                             elif alloc_name in constants:
                                 args.append(name)
@@ -605,8 +610,9 @@ def match_allocs_to_outs(ops_dict):
         qualified_call_chain.append(f"allocate({size})")
         qualified_call_chains[alloc_name] = qualified_call_chain
 
-    assert len(qualified_call_chains) == len(allocs)
-    assert set(qualified_call_chains.keys()) == set(allocs.keys())
+    assert len(qualified_call_chains) == len(names_to_allocs)
+    assert len(qualified_call_chains) == len([o for o in ops_dict["allocations_list"] if o["fn_name"] == "allocate"])
+    assert set(qualified_call_chains.keys()) == set(names_to_allocs.keys())
 
     grouped_allocs = defaultdict(list)
     unique_call_chains = defaultdict(list)
@@ -623,20 +629,19 @@ def match_allocs_to_outs(ops_dict):
             res.extend(find_all_frees(call))
         return res
 
-    outs = ops_dict["outs"]
-    if len(unique_call_chains) != len(allocs):
-        for chain, alloc_names in {
-            chain: alloc_names
-            for chain, alloc_names in unique_call_chains.items()
-            if len(alloc_names) > 1
-        }.items():
+    # prepare allocs for export and do checking
+    for chain, alloc_names in unique_call_chains.items():
+        for alloc_name in alloc_names:
+            alloc = names_to_allocs[alloc_name]
+            root_caller_op_id = call_chains[alloc_name][-2]  # -1 is the model name
+            root_caller = id_to_op[root_caller_op_id]
+            alloc["root_caller_fn_name"] = root_caller["fn_name"]
+            alloc["ptr_tag"] = int(alloc["addr"].split("_")[1])
+
             # assert that these allocs don't escape
-            for alloc_name in alloc_names:
+            if len(alloc_names) > 1:
                 assert "alloc" in alloc_name
-                assert alloc_name not in outs
-                alloc = allocs[alloc_name]
-                root_caller_op_id = call_chains[alloc_name][-2]  # -1 is the model name
-                root_caller = id_to_op[root_caller_op_id]
+                assert alloc_name not in ops_dict["outs"]
                 all_frees = find_all_frees(root_caller)
                 assert alloc["addr"] in all_frees
 
@@ -647,36 +652,37 @@ def match_allocs_to_outs(ops_dict):
     ):
         sorted_call_chain[ptr_name] = chain
 
-    return sorted_call_chain, dict(grouped_allocs), allocs
+    return sorted_call_chain, dict(grouped_allocs), names_to_allocs
 
 
-def print_call_chains(call_chains, grouped_allocs, output_allocs, file_name):
+def print_call_chains(call_chains, grouped_allocs, names_to_allocs, file_name):
     call_chains = {k.replace("$", "%"): v for k, v in call_chains.items()}
     grouped_allocs = {k.replace("$", "%"): v for k, v in grouped_allocs.items()}
-    output_allocs = {k.replace("$", "%"): v for k, v in output_allocs.items()}
+    names_to_allocs = {k.replace("$", "%"): v for k, v in names_to_allocs.items()}
 
-    for name, output_alloc in output_allocs.items():
-        output_allocs[name] = stringify_type(output_alloc, if_flist=False)
+    for name, output_alloc in names_to_allocs.items():
+        names_to_allocs[name] = stringify_type(output_alloc, if_flist=False)
 
     with open(f"call_chains/{file_name}.json", "w") as f:
         json.dump(
             {
                 "call_chains": call_chains,
                 "grouped_allocs": grouped_allocs,
-                "output_allocs": output_allocs,
+                "output_allocs": names_to_allocs,
             },
-            f, indent=2
+            f,
+            indent=2,
         )
 
-    for name, output_alloc in output_allocs.items():
-        output_allocs[name] = stringify_type(output_alloc, if_flist=True)
+    for name, output_alloc in names_to_allocs.items():
+        names_to_allocs[name] = stringify_type(output_alloc, if_flist=True)
 
     with open(f"call_chains/{file_name}.yml", "w") as f:
         yaml.dump(
             {
                 "call_chains": call_chains,
                 "grouped_allocs": grouped_allocs,
-                "output_allocs": output_allocs,
+                "output_allocs": names_to_allocs,
             },
             f,
         )
@@ -712,20 +718,23 @@ def list_all_ops(profiles_fp):
     pprint(ops)
 
 
+def get_call_chains(ops_dict):
+    ops_dict = label_pointers(ops_dict)
+    sorted_call_chain, grouped_allocs, names_to_allocs = match_allocs_to_outs(ops_dict)
+    return sorted_call_chain, grouped_allocs, names_to_allocs
+
+
 def main(model_name):
     print(model_name)
-    fix_yaml(model_name)
     ops_dict = load_ops_yaml(model_name)
     ops_dict = parse_ops_dict(ops_dict)
-    ops_dict = label_pointers(ops_dict)
-    sorted_call_chain, grouped_allocs, allocs = match_allocs_to_outs(ops_dict)
-    print_call_chains(sorted_call_chain, grouped_allocs, allocs, model_name)
+    sorted_call_chain, grouped_allocs, names_to_allocs = get_call_chains(ops_dict)
+    print_call_chains(sorted_call_chain, grouped_allocs, names_to_allocs, model_name)
 
 
 def fix_yaml(model_name):
     f = open(f"profiles/{model_name}.yml", "r+")
     f_lines = f.readlines()
-    print(f_lines[0])
     gr = f_lines[0]
     if "graph:" in gr:
         return
@@ -736,50 +745,39 @@ def fix_yaml(model_name):
     f.writelines(f_lines)
 
 
-# def f(x):
-#     return x*x
-#
-# if __name__ == '__main__':
-#     with Pool(processes=4) as pool:         # start 4 worker processes
-#         result = pool.apply_async(f, (10,)) # evaluate "f(10)" asynchronously in a single process
-#     print(result.get())
-# print(result.get(timeout=1))        # prints "100" unless your computer is *very* slow
-#
-# print(pool.map(f, range(10)))       # prints "[0, 1, 4,..., 81]"
-#
-# it = pool.imap(f, range(10))
-# print(next(it))                     # prints "0"
-# print(next(it))                     # prints "1"
-# print(it.next(timeout=1))           # prints "4" unless your computer is *very* slow
-#
-# result = pool.apply_async(time.sleep, (10,))
-# print(result.get(timeout=1))        # raises multiprocessing.TimeoutError
+def export_memory_reqs(
+        ops_dict, named_allocations
+) -> Dict[LiveRange, Tuple[RequiredAlloc, str]]:
+    alloc_op_id_to_root_caller = {
+        n["op_id"]: n["root_caller_fn_name"] for n in named_allocations.values()
+    }
+    mem_events_paired = defaultdict(list)
+    mem_events = ops_dict["allocations_list"]
+    for mem_ev in mem_events:
+        ptr_addr, size, ts = mem_ev["addr"], mem_ev["size"], mem_ev["op_id"]
+        mem_events_paired[ptr_addr].append((size, ts))
+
+    lvr_to_req_plus_root_caller = {}
+    for ptr_addr, mem_evts in mem_events_paired.items():
+        if len(mem_evts) < 2:
+            warnings.warn(f"no free {mem_evts}")
+            # hacky...
+            alloc_size, alloc_ts = mem_evts[0]
+            mem_evts.append(
+                (alloc_size, alloc_ts + 100)
+            )
+
+        alloc_evt, free_evt = mem_evts
+        alloc_size, alloc_ts = alloc_evt
+        free_size, free_ts = free_evt
+        assert alloc_size == free_size
+        assert alloc_ts < free_ts
+        req = RequiredAlloc(LiveRange(alloc_ts, free_ts), alloc_size, ptr_addr)
+        lvr_to_req_plus_root_caller[req.lvr] = namedtuple(
+            "lvr_to_req_plus_root_caller", ["req", "root_caller_fn_name"]
+        )(req, alloc_op_id_to_root_caller[alloc_ts])
+    return lvr_to_req_plus_root_caller
+
 
 if __name__ == "__main__":
-    with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
-        for i, fp in enumerate(glob.glob("profiles/*.yml")):
-            model_name = os.path.splitext(os.path.split(fp)[-1])[-2]
-            fix_yaml(model_name)
-            pool.apply_async(with_log, (main, model_name))
-        pool.close()
-        pool.join()
-
-    # for i in range(1, 11):
-    #     ops_dict = load_ops_yaml(f"alexnet.x{i}")
-    #     for j, alloc in enumerate(ops_dict["allocations_list"]):
-    #         del alloc["op_id"]
-    #         del alloc["addr"]
-    #         ops_dict["allocations_list"][j] = tuple(map(str, alloc.values()))
-    #
-    #     c = Counter(ops_dict["allocations_list"])
-    #     print(i, c)
-    #
-        #     alexnets[i] = json.load(open(f"call_chains/alexnet.x{i}.json"))
-    # print(alexnets)
-    # for i, fp in enumerate(glob.glob("profiles/*.yml")):
-    #     model_name = os.path.splitext(os.path.split(fp)[-1])[-2]
-    #     main(model_name)
-
-    # print_ops_dict(ops_dict, "resnet18")
-    # find_out_variants(ops_dict, "resnet18")
-    # parse_native_functions_yaml("/Users/mlevental/dev_projects/pytorch_shape_inference/aten/src/ATen/native/native_functions.yaml")
+    main("alexnet.x1")

@@ -15,19 +15,19 @@ def get_cmap(n, name="spring"):
 
 
 def add_envelope_to_memory_map(
-        fig,
-        ax,
-        x_min,
-        _x_max,
-        _y_min,
-        _y_max,
-        allocations: List[PlannedAlloc],
-        title,
-        *,
-        shade=True,
-        save=True,
-        fp_dir=os.getcwd() + "/memory_maps",
-        rescale_to_mb=True,
+    fig,
+    ax,
+    x_min,
+    _x_max,
+    _y_min,
+    _y_max,
+    allocations: List[PlannedAlloc],
+    title,
+    *,
+    shade=True,
+    save=True,
+    fp_dir=os.getcwd() + "/memory_maps",
+    rescale_to_mb=True,
 ):
     envelope_x = []
     envelope_y = []
@@ -41,8 +41,8 @@ def add_envelope_to_memory_map(
         )
 
         if offset + size > max(
-                [allo.mem_region.offset + allo.mem_region.size for allo in allocations[i:]],
-                default=float("inf"),
+            [allo.mem_region.offset + allo.mem_region.size for allo in allocations[i:]],
+            default=float("inf"),
         ):
             envelope_x.append(end)
             if rescale_to_mb:
@@ -88,12 +88,12 @@ def add_envelope_to_memory_map(
 
 
 def _make_memory_map(
-        allocations: List[PlannedAlloc],
-        title,
-        *,
-        save=True,
-        fp_dir=os.getcwd() + "/memory_maps",
-        rescale_to_mb=True,
+    allocations: List[PlannedAlloc],
+    title,
+    *,
+    save=True,
+    fp_dir=os.getcwd() + "/memory_maps",
+    rescale_to_mb=True,
 ):
     fig, ax = plt.subplots(figsize=(50, 10))
 
@@ -155,13 +155,13 @@ def _make_memory_map(
 
 
 def make_memory_map(
-        allocations: List[PlannedAlloc],
-        title,
-        *,
-        save=True,
-        fp_dir=os.getcwd() + "/memory_maps",
-        rescale_to_mb=True,
-        add_envelope=False,
+    allocations: List[PlannedAlloc],
+    title,
+    *,
+    save=True,
+    fp_dir=os.getcwd() + "/memory_maps",
+    rescale_to_mb=True,
+    add_envelope=False,
 ):
     fig, ax, x_min, x_max, y_min, y_max = _make_memory_map(
         allocations, title, save=save, fp_dir=fp_dir, rescale_to_mb=rescale_to_mb
@@ -205,12 +205,12 @@ strat_colors = {
 
 
 def plot_mem_usage(
-        mem_usage,
-        title,
-        normalizer_name="mip",
-        logy=False,
-        last_one="linear_scan",
-        ylabel="% max mem",
+    mem_usage,
+    title,
+    normalizer_name="mip",
+    logy=False,
+    last_one="linear_scan",
+    ylabel="% max mem",
 ):
     strategies = set()
     for model, strats in mem_usage.items():
@@ -248,9 +248,9 @@ def plot_mem_usage(
             width,
             color=strat_colors[strat],
             label=strat.replace("profiled ", "")
-                .replace("static ", "")
-                .replace("_", " ")
-                .upper(),
+            .replace("static ", "")
+            .replace("_", " ")
+            .upper(),
         )
 
     # Add some text for labels, title and custom x-axis tick labels, etc.
@@ -271,12 +271,8 @@ def plot_mem_usage(
 
     fig.tight_layout()
 
-    fig.savefig(
-        f"/home/mlevental/dev_projects/pytorch_dev/memory_allocator/benchmarks/{title.replace(' ', '_')}.pdf"
-    )
-    fig.savefig(
-        f"/home/mlevental/dev_projects/pytorch_dev/memory_allocator/benchmarks/{title.replace(' ', '_')}.svg"
-    )
+    fig.savefig(f"benchmarks/{title.replace(' ', '_')}.pdf")
+    fig.savefig(f"benchmarks/{title.replace(' ', '_')}.svg")
 
 
 # sns.set(rc={'figure.figsize':(20, 10)})
@@ -405,23 +401,34 @@ def plot_results(fp):
 
 
 def plot_jemalloc_heap_profile(fp, model_name):
-    df = pd.read_csv(fp, names="type,ts,ptr,allocated,active,metadata,resident,mapped,retained".split(","))
+    df = pd.read_csv(
+        fp,
+        names="type,ts,ptr,allocated,active,metadata,resident,mapped,retained".split(
+            ","
+        ),
+    )
     df["allocated,active,metadata,resident,mapped,retained".split(",")] /= 2 ** 20
-    ax = df["allocated,active,metadata,resident,mapped,retained".split(",")].plot(figsize=(12, 7))
+    ax = df["allocated,active,metadata,resident,mapped,retained".split(",")].plot(
+        figsize=(12, 7)
+    )
     ax.set_xlabel("Model", labelpad=10, fontsize=24)
     ax.set_ylabel("MB", labelpad=10, fontsize=24)
     ax.set_title(f"{model_name} jemalloc stats", fontsize=24)
     ax.legend(loc="upper left")
     plt.tight_layout()
-    plt.savefig(f"/home/mlevental/dev_projects/pytorch_memory_planning/jemalloc_plots/{model_name}.pdf")
+    plt.savefig(f"jemalloc_plots/{model_name}.pdf")
     plt.close()
 
+
 if __name__ == "__main__":
-    df = pd.read_csv("/home/mlevental/dev_projects/pytorch_memory_planning/je_malloc_runs/res.csv", names=["model", "normal", "uptime_ns"])
+    df = pd.read_csv(
+        "je_malloc_runs/res.csv",
+        names=["model", "normal", "uptime_ns"],
+    )
     piv = df.pivot(index="model", columns="normal", values="uptime_ns")
     piv = piv.dropna()
     print(df)
-    runs_dir = "/home/mlevental/dev_projects/pytorch_memory_planning/je_malloc_runs/"
+    runs_dir = "je_malloc_runs/"
     for path, directories, files in os.walk(runs_dir):
         _, name = os.path.split(path)
         if "heap_profile.csv" in set(files):
