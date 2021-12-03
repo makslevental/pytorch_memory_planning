@@ -1,13 +1,11 @@
 import inspect
 
 import torch
-
 # from torchvision import models
 # from torchvision.models.segmentation import deeplabv3_resnet50
 from torch import nn
 from torch._C._autograd import DeviceType
 from torch.nn import functional as F
-
 # from torchvision import models
 # from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_resnet101
 # from transformers import BertTokenizer, BertModel, BertConfig
@@ -220,15 +218,36 @@ def make_toy_model():
     y.save(f"models/toy_model.pt")
 
 
+# def make_all_vision_models():
+#     modelss = _vision_models()
+#     for name, model_fn in modelss.items():
+#         print(name)
+#         with torch.no_grad():
+#             model = model_fn(pretrained=False).eval()
+#             print(model)
+#             x = torch.rand((1, 3, 52, 52))
+#             y = torch.jit.trace(model, (x,), strict=False)
+
+
+def make_vision_model(model_name):
+    with torch.no_grad():
+        model = vision_models(model_name).eval()
+        x = torch.rand((1, 3, 64, 44))
+        y = torch.jit.trace(model, (x,), strict=False)
+        y.save(f"models/{model_name}.pt")
+
+
+import multiprocessing
+
+
 def make_all_vision_models():
     modelss = _vision_models()
-    for name, model_fn in modelss.items():
-        print(name)
-        with torch.no_grad():
-            model = model_fn(pretrained=False).eval()
-            print(model)
-            x = torch.rand((1, 3, 52, 52))
-            y = torch.jit.trace(model, (x,), strict=False)
+    with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+        for name, model_fn in modelss.items():
+            print(name)
+            pool.apply_async(make_vision_model, (name,))
+        pool.close()
+        pool.join()
 
 
 if __name__ == "__main__":
