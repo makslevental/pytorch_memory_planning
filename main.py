@@ -13,9 +13,7 @@ from memory_observer import (
     parse_ops_dict,
     with_log,
 )
-from profile_models import (
-    analyze_model,
-)
+
 from strategies import (
     greedy_by_size,
     bump_allocator,
@@ -24,7 +22,9 @@ from strategies import (
     find_gap,
     GapPriority,
     verify_allocation,
-    PlannedAlloc, mincost_flow, gergov,
+    PlannedAlloc,
+    mincost_flow,
+    gergov,
 )
 
 
@@ -45,13 +45,15 @@ def plan_greedy_strats(req_mem_allocs, model_name):
     with Timer(model_name, "greedy_by_size_smallest_gap") as _:
         greedy_by_size_smallest_gap = greedy_by_size(req_mem_allocs)
     with Timer(model_name, "greedy_by_size_first_gap") as _:
-        greedy_by_size_first_gap = greedy_by_size(req_mem_allocs,
-                                                  gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST))
+        greedy_by_size_first_gap = greedy_by_size(
+            req_mem_allocs, gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST)
+        )
     with Timer(model_name, "greedy_by_longest_smallest_gap") as _:
         greedy_by_longest_smallest_gap = greedy_by_longest(req_mem_allocs)
     with Timer(model_name, "greedy_by_longest_first_gap") as _:
-        greedy_by_longest_first_gap = greedy_by_longest(req_mem_allocs,
-                                                        gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST))
+        greedy_by_longest_first_gap = greedy_by_longest(
+            req_mem_allocs, gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST)
+        )
 
     return {
         "greedy_by_size_smallest_gap": greedy_by_size_smallest_gap,
@@ -142,7 +144,8 @@ if __name__ == "__main__":
         "call_chains",
         "je_malloc_runs",
         "jemalloc_plots",
-        "logs" "memory_maps",
+        "logs",
+        "memory_maps",
         "models",
         "perf_records",
         "planned_allocs",
@@ -153,11 +156,16 @@ if __name__ == "__main__":
         if not os.path.isdir(dir):
             os.mkdir(dir)
 
+    # for i, fp in enumerate(glob.glob("profiles/*.yml")):
+    #     if "deep" in fp: continue
+    #     _, fn = os.path.split(fp)
+    #     model_name, params, _yml = fn.split(".")
+    #     make_planned_allocs_csv(model_name, params)
+
     with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
         for i, fp in enumerate(glob.glob("profiles/*.yml")):
             _, fn = os.path.split(fp)
             model_name, params, _yml = fn.split(".")
-            # make_planned_allocs_csv(model_name, params)
             pool.apply_async(with_log, (make_planned_allocs_csv, (model_name, params)))
         pool.close()
         pool.join()

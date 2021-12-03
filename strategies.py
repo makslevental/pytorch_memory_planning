@@ -10,7 +10,6 @@ from typing import List, Dict
 
 import networkx as nx
 import numpy as np
-from intervaltree import IntervalTree
 from ncls import NCLS
 from ortools.linear_solver import pywraplp
 from ortools.sat.python import cp_model
@@ -82,23 +81,24 @@ class MemRegion:
 import hashlib
 
 
-@dataclass
 class RequiredAlloc:
     lvr: LiveRange
     size: int
-    ptr_addr: str
+    ptr_addr = 0
+
+    def __init__(self, lvr, size, ptr_addr):
+        self.lvr = lvr
+        self.size = size
+        self.ptr_addr = ptr_addr
 
     def __str__(self):
         return f"{self.lvr}:({self.size}, '{self.ptr_addr}')"
-
-    def __repr__(self):
-        return str(self)
 
     def __hash__(self):
         return int(hashlib.sha256(str(self).encode("utf-8")).hexdigest(), 16) % 10 ** 8
 
 
-@dataclass(eq=True, unsafe_hash=False, frozen=True)
+@dataclass(eq=True)
 class PlannedAlloc:
     lvr: LiveRange
     mem_region: MemRegion
@@ -132,11 +132,10 @@ def find_gap(
     best_gap = float("inf")
     best_offset = None
     prev_offset = 0
-
     overlapping_sorted_allocs = [
-        current_allocs[interval.data]
-        for interval in interval_tree.overlap(record.lvr.begin, record.lvr.end + 1)
-        if interval.data in current_allocs and interval.data != record.ptr_addr
+        current_allocs[interval[2]]
+        for interval in interval_tree.find_overlap(record.lvr.begin, record.lvr.end + 1)
+        if interval[2] in current_allocs and interval[2] != record.ptr_addr
     ]
     overlapping_sorted_allocs.sort(key=lambda x: x.mem_region.offset)
     for alloc in overlapping_sorted_allocs:
@@ -161,9 +160,12 @@ def _greedy_by_size(
     sorted_req_mem_allocs: List[RequiredAlloc],
     gap_finder,
 ):
-    current_allocs: Dict[str, PlannedAlloc] = {}
-    interval_tree = IntervalTree.from_tuples(
-        (req.lvr.begin, req.lvr.end + 1, req.ptr_addr) for req in sorted_req_mem_allocs
+    current_allocs: Dict[int, PlannedAlloc] = {}
+    interval_tree = make_ncls_from_tuples(
+        [
+            (req.lvr.begin, req.lvr.end + 1, req.ptr_addr)
+            for req in sorted_req_mem_allocs
+        ]
     )
     inorder_of_decision_allocs: List[PlannedAlloc] = []
     for mem_alloc in sorted_req_mem_allocs:
@@ -184,6 +186,10 @@ def greedy_by_size(
     print("greedy by size", file=sys.stderr)
     # biggest size first but break ties deterministically
     req_mem_allocs.sort(key=lambda r: (r.size, r.lvr), reverse=True)
+    # we need for this for ncls
+    ptr_hash_ptr_map = {req.ptr_addr: i for i, req in enumerate(req_mem_allocs)}
+    for req in req_mem_allocs:
+        req.ptr_addr = ptr_hash_ptr_map[req.ptr_addr]
     return _greedy_by_size(req_mem_allocs, gap_finder)
 
 
@@ -194,6 +200,10 @@ def greedy_by_longest(
 ):
     print("greedy by longest", file=sys.stderr)
     req_mem_allocs.sort(key=lambda r: (len(r.lvr), r.lvr), reverse=True)
+    # we need for this for ncls
+    ptr_hash_ptr_map = {req.ptr_addr: i for i, req in enumerate(req_mem_allocs)}
+    for req in req_mem_allocs:
+        req.ptr_addr = ptr_hash_ptr_map[req.ptr_addr]
     return _greedy_by_size(req_mem_allocs, gap_finder)
 
 
@@ -302,14 +312,14 @@ def gergov(required_allocs: List[RequiredAlloc]) -> List[PlannedAlloc]:
     J = [(r.lvr.begin, r.lvr.end + 1, r.size) for r in required_allocs]
 
     def if_there_exists(xl, xr):
-        HH = IntervalTree.from_tuples(H)
+        HH = make_ncls_from_tuples(H)
         # JJ = IntervalTree.from_tuples(J)
-        JJ = IntervalTree.from_tuples(J)
-        for (r, c, s) in sorted(JJ.overlap(xl, xr), key=lambda j: j[0]):
+        JJ = make_ncls_from_tuples(J)
+        for (r, c, s) in sorted(JJ.find_overlap(xl, xr), key=lambda j: j[0]):
             # for (r, c, s) in JJ.overlap(xl, xr):
             # for (r, c, s) in JJ.overlap(xl, xr):
-            if not HH.overlaps(r, c):
-                return (r, c, s)
+            if not HH.has_overlap(r, c):
+                return r, c, s
 
         return None
 
@@ -337,12 +347,12 @@ def gergov(required_allocs: List[RequiredAlloc]) -> List[PlannedAlloc]:
     #     assert v in [(r.size, r.lvr.begin, r.lvr.end+1) for r in required_allocs]
     # for r in required_allocs:
     #     assert (r.size, r.lvr.begin, r.lvr.end+1) in V
-    VV = IntervalTree.from_tuples(V)
+    VV = make_ncls_from_tuples(V)
     E = defaultdict(list)
-    for u in VV:
+    for u in VV.intervals():
         ur, uc, us = u
         alphap_u = alphap[ur, uc, us]
-        for v in VV.overlap(ur, uc):
+        for v in VV.find_overlap(ur, uc):
             if u == v:
                 continue
             vr, vc, vs = v
@@ -515,6 +525,7 @@ def solve_csp(required_allocs: List[RequiredAlloc]):
     model.Minimize(total_size)
 
     solver = cp_model.CpSolver()
+    # solver.parameters.max_time_in_seconds = 1000.0
     status = solver.Solve(model)
 
     # # https://github.com/google/or-tools/blob/stable/ortools/sat/doc/model.md#model-copy
@@ -676,8 +687,6 @@ def lstm_test(lvrs):
 
 
 if __name__ == "__main__":
-    from profile_models import get_required_mem_allocs
-
     LSTM_lvrs = {
         (0, 3): 1024,
         (1, 3): 1024,
@@ -696,10 +705,11 @@ if __name__ == "__main__":
         for i, ((begin, end), size) in enumerate(LSTM_lvrs.items())
     ]
 
-    trace_json = json.load(open("traces/resnet18,1x3x128x128.json"))
-    req_mem_allocs = get_required_mem_allocs(trace_json)
+    # trace_json = json.load(open("traces/resnet18,1x3x128x128.json"))
+    # req_mem_allocs = get_required_mem_allocs(trace_json)
 
     res = gergov(req_mem_allocs)
+    pprint(res)
     # res.sort(key=lambda r: r.lvr.begin)
     print(verify_allocation(res))
     print(calculate_high_watermark(res))

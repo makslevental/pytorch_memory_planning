@@ -1,7 +1,6 @@
 import glob
 import json
 import sys
-import time
 import traceback
 import warnings
 from collections import defaultdict, namedtuple
@@ -146,7 +145,8 @@ def parse_ops_dict(ops_dict):
             op["args types"] = [make_torch_type(a) for a in op["args types"]]
             op["returns"] = [op["args"]]
         else:
-            warnings.warn("no schema: " + op["fn_name"])
+            pass
+            # warnings.warn("no schema: " + op["fn_name"])
 
         for i, arg in enumerate(op["args"]):
             if isinstance(arg, list):
@@ -297,9 +297,9 @@ def label_pointers(ops_dict):
         nonlocal known_aliases, ptr_addr_to_name
         # get names from "parent" (caller)
         if not any(
-                (i, p_arg_or_ret)
-                for i, p_arg_or_ret in enumerate(parent_args_or_rets)
-                if arg_or_ret == p_arg_or_ret
+            (i, p_arg_or_ret)
+            for i, p_arg_or_ret in enumerate(parent_args_or_rets)
+            if arg_or_ret == p_arg_or_ret
         ):
             # if not passed in from parent (and not empty) then it should be a known pointer
             if "empty" in arg_or_ret:
@@ -325,26 +325,26 @@ def label_pointers(ops_dict):
         elif not (ptr_addr_to_name[arg_or_ret] == arg_or_ret_name):
             # updating with top level visible names
             if (
-                    "alloc" in ptr_addr_to_name[arg_or_ret]
-                    and "alloc" not in arg_or_ret_name
+                "alloc" in ptr_addr_to_name[arg_or_ret]
+                and "alloc" not in arg_or_ret_name
             ):
                 ptr_addr_to_name[arg_or_ret] = arg_or_ret_name
             # updating with dominating name (passed in and out of a single op y = f(X), then y aliases x
             elif name_order[arg_or_ret_name] < name_order[ptr_addr_to_name[arg_or_ret]]:
                 # can't happen with allocs because they come out of `allocate`
                 assert ("alloc" not in ptr_addr_to_name[arg_or_ret]) and (
-                        "alloc" not in arg_or_ret_name
+                    "alloc" not in arg_or_ret_name
                 )
                 assert (
-                           ptr_addr_to_name[arg_or_ret],
-                           arg_or_ret_name,
-                       ) not in known_aliases
+                    ptr_addr_to_name[arg_or_ret],
+                    arg_or_ret_name,
+                ) not in known_aliases
                 # tuple order corresponds to name_order
                 known_aliases.add((arg_or_ret_name, ptr_addr_to_name[arg_or_ret]))
                 ptr_addr_to_name[arg_or_ret] = arg_or_ret_name
             # we should be catching aliases in the correct order (later gets seen first because we percolate backwards first)
             elif (
-                    name_order[arg_or_ret_name] >= name_order[ptr_addr_to_name[arg_or_ret]]
+                name_order[arg_or_ret_name] >= name_order[ptr_addr_to_name[arg_or_ret]]
             ):
                 assert (ptr_addr_to_name[arg_or_ret], arg_or_ret_name) in known_aliases
             else:
@@ -370,11 +370,11 @@ def label_pointers(ops_dict):
         for call in this_calls:
             names = [None] * len(call[args_or_rets])
             for arg_or_ret_idx, (arg_or_ret, typ) in enumerate(
-                    zip(call[args_or_rets], call[f"{args_or_rets} types"])
+                zip(call[args_or_rets], call[f"{args_or_rets} types"])
             ):
                 # TODO: optionals
                 if isinstance(typ, ListType) and isinstance(
-                        typ.getElementType(), TensorType
+                    typ.getElementType(), TensorType
                 ):
                     if f"{args_or_rets} names" in call:
                         arg_or_ret_name = call[f"{args_or_rets} names"][arg_or_ret_idx]
@@ -410,7 +410,7 @@ def label_pointers(ops_dict):
                 else:
                     if isinstance(arg_or_ret, str) and "tensor_ptr" in arg_or_ret:
                         raise Exception("wtf")
-                    warnings.warn(f'new constant {call["op_id"]} {arg_or_ret}')
+                    # warnings.warn(f'new constant {call["op_id"]} {arg_or_ret}')
                     new_constant += 1
                     arg_or_ret_name = f"$new_constant_{new_constant}"
                     constants[arg_or_ret_name] = arg_or_ret
@@ -611,7 +611,9 @@ def match_allocs_to_outs(ops_dict):
         qualified_call_chains[alloc_name] = qualified_call_chain
 
     assert len(qualified_call_chains) == len(names_to_allocs)
-    assert len(qualified_call_chains) == len([o for o in ops_dict["allocations_list"] if o["fn_name"] == "allocate"])
+    assert len(qualified_call_chains) == len(
+        [o for o in ops_dict["allocations_list"] if o["fn_name"] == "allocate"]
+    )
     assert set(qualified_call_chains.keys()) == set(names_to_allocs.keys())
 
     grouped_allocs = defaultdict(list)
@@ -648,7 +650,7 @@ def match_allocs_to_outs(ops_dict):
     sorted_call_chain = {}
     name_order = ops_dict["name_order"]
     for ptr_name, chain in sorted(
-            qualified_call_chains.items(), key=lambda name_chain: name_order[name_chain[0]]
+        qualified_call_chains.items(), key=lambda name_chain: name_order[name_chain[0]]
     ):
         sorted_call_chain[ptr_name] = chain
 
@@ -746,7 +748,7 @@ def fix_yaml(model_name):
 
 
 def export_memory_reqs(
-        ops_dict, named_allocations
+    ops_dict, named_allocations
 ) -> Dict[LiveRange, Tuple[RequiredAlloc, str]]:
     alloc_op_id_to_root_caller = {
         n["op_id"]: n["root_caller_fn_name"] for n in named_allocations.values()
@@ -760,12 +762,10 @@ def export_memory_reqs(
     lvr_to_req_plus_root_caller = {}
     for ptr_addr, mem_evts in mem_events_paired.items():
         if len(mem_evts) < 2:
-            warnings.warn(f"no free {mem_evts}")
+            # warnings.warn(f"no free {mem_evts}")
             # hacky...
             alloc_size, alloc_ts = mem_evts[0]
-            mem_evts.append(
-                (alloc_size, alloc_ts + 100)
-            )
+            mem_evts.append((alloc_size, alloc_ts + 100))
 
         alloc_evt, free_evt = mem_evts
         alloc_size, alloc_ts = alloc_evt
