@@ -6,6 +6,7 @@ from functools import partial
 from itertools import chain
 from typing import List
 import multiprocessing
+import glob
 
 from memory_observer import (
     load_ops_yaml,
@@ -178,11 +179,12 @@ if __name__ == "__main__":
     #     model_name, params, _yml = fn.split(".")
     #     make_planned_allocs_csv(model_name, params)
 
-    # make_planned_allocs_csv("alexnet", "x1")
+    # make_planned_allocs_csv("regnet_x_16gf", "x1")
     with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
         for i, fp in enumerate(glob.glob("profiles/*.yml")):
             _, fn = os.path.split(fp)
             model_name, params, _yml = fn.split(".")
             pool.apply_async(with_log, (make_planned_allocs_csv, (model_name, params)))
+            # pool.apply_async(make_planned_allocs_csv, (model_name, params))
         pool.close()
         pool.join()

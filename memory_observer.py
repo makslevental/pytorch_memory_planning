@@ -282,7 +282,8 @@ def label_pointers(ops_dict):
 
     known_aliases = set()
 
-    def handle_tensor(call, arg_or_ret, parent_args_or_rets, parent_args_or_rets_names):
+    def handle_tensor(call, arg_or_ret, arg_or_ret_typ, parent_args_or_rets, parent_args_or_rets_names):
+        nonlocal new_constant
         nonlocal known_aliases, ptr_addr_to_name
         # get names from "parent" (caller)
         if not any(
@@ -295,11 +296,17 @@ def label_pointers(ops_dict):
                 return
             if arg_or_ret in ptr_addr_to_name:
                 arg_or_ret_name = ptr_addr_to_name[arg_or_ret]
+            elif isinstance(arg_or_ret_typ, ListType) and isinstance(arg_or_ret_typ.getElementType(), TensorType):
+                assert isinstance(arg_or_ret, tuple) or isinstance(arg_or_ret, list)
+                for t in arg_or_ret:
+                    assert t in ptr_addr_to_name
+
+                new_constant += 1
+                arg_or_ret_name = f"$new_list_val_{new_constant}"
+                constants[arg_or_ret_name] = arg_or_ret
+                constants_to_names[arg_or_ret] = arg_or_ret_name
             else:
-                warnings.warn(
-                    f"couldn't identify arg: {arg_or_ret} to call {call['op_id']}"
-                )
-                return None
+                raise Exception("wtf")
         else:
             parent_args_idx = next(
                 i
@@ -371,6 +378,7 @@ def label_pointers(ops_dict):
                         arg_or_ret_name = handle_tensor(
                             call,
                             arg_or_ret,
+                            typ,
                             parent_args_or_rets,
                             parent_args_or_rets_names,
                         )
@@ -391,6 +399,7 @@ def label_pointers(ops_dict):
                     arg_or_ret_name = handle_tensor(
                         call,
                         arg_or_ret,
+                        typ,
                         parent_args_or_rets,
                         parent_args_or_rets_names,
                     )
@@ -769,4 +778,4 @@ def export_memory_reqs(
 
 
 if __name__ == "__main__":
-    main("alexnet.x1")
+    main("regnet_x_16gf.x1")
