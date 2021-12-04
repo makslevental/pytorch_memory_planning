@@ -1,7 +1,5 @@
 import glob
 import json
-import sys
-import traceback
 import warnings
 from collections import defaultdict, namedtuple
 from pprint import pprint
@@ -43,15 +41,6 @@ def load_ops_yaml(model_name):
         ops_dict = yaml.load(stream, Loader=yaml.CLoader)
     ops_dict["model_name"] = model_name
     return ops_dict
-
-
-def with_log(fn, args):
-    sys.stderr = open(f"logs/{'.'.join(args)}.err", "w")
-    # sys.stdout = open(f"logs/{'.'.join(args)}.log", "w")
-    try:
-        fn(*args)
-    except:
-        traceback.print_exc()
 
 
 def ls_or_empty(op, key):

@@ -1,7 +1,7 @@
-import glob
-import multiprocessing
 import os
+import sys
 import time
+import traceback
 from functools import partial
 from itertools import chain
 from typing import List
@@ -11,7 +11,6 @@ from memory_observer import (
     export_memory_reqs,
     get_call_chains,
     parse_ops_dict,
-    with_log,
 )
 from strategies import (
     greedy_by_size,
@@ -22,8 +21,7 @@ from strategies import (
     GapPriority,
     verify_allocation,
     PlannedAlloc,
-    mincost_flow,
-    gergov, make_df_from_reqs,
+    gergov, make_df_from_reqs, solve_mip, ortools_mincost_flow
 )
 
 
@@ -40,18 +38,18 @@ class Timer:
         print(self.model, self.strategy, end - self.start, flush=True)
 
 
-def plan_greedy_strats(req_mem_allocs, model_name):
+def plan_greedy_strats(req_mem_allocs_df, model_name):
     with Timer(model_name, "greedy_by_size_smallest_gap") as _:
-        greedy_by_size_smallest_gap = greedy_by_size(req_mem_allocs)
+        greedy_by_size_smallest_gap = greedy_by_size(req_mem_allocs_df)
     with Timer(model_name, "greedy_by_size_first_gap") as _:
         greedy_by_size_first_gap = greedy_by_size(
-            req_mem_allocs, gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST)
+            req_mem_allocs_df, gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST)
         )
     with Timer(model_name, "greedy_by_longest_smallest_gap") as _:
-        greedy_by_longest_smallest_gap = greedy_by_longest(req_mem_allocs)
+        greedy_by_longest_smallest_gap = greedy_by_longest(req_mem_allocs_df)
     with Timer(model_name, "greedy_by_longest_first_gap") as _:
         greedy_by_longest_first_gap = greedy_by_longest(
-            req_mem_allocs, gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST)
+            req_mem_allocs_df, gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST)
         )
 
     return {
@@ -62,41 +60,43 @@ def plan_greedy_strats(req_mem_allocs, model_name):
     }
 
 
-def plan_programming_starts(req_mem_allocs, model_name):
+def plan_programming_strats(req_mem_allocs_df, model_name):
     with Timer(model_name, "csp"):
-        csp = solve_csp(req_mem_allocs)
+        csp = solve_csp(req_mem_allocs_df)
+    with Timer(model_name, "mip"):
+        mip = solve_mip(req_mem_allocs_df)
+    with Timer(model_name, "mincost_flow"):
+        mincost_flow = ortools_mincost_flow(req_mem_allocs_df)
 
     return {
         "csp": csp,
-        # "mip": solve_mip(req_mem_allocs),
+        "mip": mip,
+        "mincost_flow": mincost_flow
     }
 
 
-def plan_other_strats(req_mem_allocs, model_name):
+def plan_other_strats(req_mem_allocs_df, model_name, req_mem_allocs):
     with Timer(model_name, "bump"):
         bump = bump_allocator(req_mem_allocs)
-    with Timer(model_name, "mincost_flow"):
-        flow = mincost_flow(req_mem_allocs)
     with Timer(model_name, "gergov"):
-        gerg = gergov(req_mem_allocs)
+        gerg = gergov(req_mem_allocs_df)
     return {
         "bump": bump,
-        "mincost_flow": flow,
         "gergov": gerg,
     }
 
 
 def make_maps(model, x, name):
     # trace_json = json.load(open(os.getcwd() + f"/traces/{name}.json"))
-    # req_mem_allocs = get_required_mem_allocs(trace_json)
+    # req_mem_allocs_df = get_required_mem_allocs(trace_json)
     # mem_events = get_mem_events(trace_json)
 
-    req_mem_allocs, mem_events = analyze_model(model, x)
-    # print("len req_mem_allocs", len(req_mem_allocs))
+    req_mem_allocs_df, mem_events = analyze_model(model, x)
+    # print("len req_mem_allocs_df", len(req_mem_allocs_df))
 
-    plan_greedy_strats(req_mem_allocs, name)
-    plan_programming_starts(req_mem_allocs, name)
-    plan_other_strats(req_mem_allocs, name)
+    plan_greedy_strats(req_mem_allocs_df, name)
+    plan_programming_strats(req_mem_allocs_df, name)
+    plan_other_strats(req_mem_allocs_df, name)
 
 
 def maybe_make_dir(dir):
@@ -115,9 +115,9 @@ def make_planned_allocs_csv(model_name, params=None):
 
     strats = []
     strats.append(plan_greedy_strats(req_allocs_df, model_name))
+    strats.append(plan_other_strats(req_allocs_df, model_name, req_allocs))
     if len(req_allocs_df) < 10000:
-        strats.append(plan_programming_starts(req_allocs_df, model_name))
-    strats.append(plan_other_strats(req_allocs_df, model_name))
+        strats.append(plan_programming_strats(req_allocs_df, model_name))
 
     for strat, plan in chain(*[s.items() for s in strats]):
         plan: List[PlannedAlloc]
@@ -132,6 +132,8 @@ def make_planned_allocs_csv(model_name, params=None):
                 fp = f"planned_allocs/{model_name}/{strat}.csv"
             with open(fp, "w") as f:
                 for p_alloc in plan:
+                    if p_alloc.lvr not in lvr_to_req_plus_root_caller:
+                        raise "wtf"
                     root_caller = lvr_to_req_plus_root_caller[
                         p_alloc.lvr
                     ].root_caller_fn_name
@@ -140,6 +142,15 @@ def make_planned_allocs_csv(model_name, params=None):
                             f"{p_alloc.lvr.begin},{p_alloc.lvr.end},{p_alloc.mem_region.offset},{p_alloc.mem_region.size},{root_caller}\n"
                         ]
                     )
+
+
+def with_log(fn, args):
+    sys.stderr = open(f"logs/{'.'.join(args)}.err", "w")
+    # sys.stdout = open(f"logs/{'.'.join(args)}.log", "w")
+    try:
+        fn(*args)
+    except:
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
@@ -166,6 +177,7 @@ if __name__ == "__main__":
     #     model_name, params, _yml = fn.split(".")
     #     make_planned_allocs_csv(model_name, params)
 
+    # make_planned_allocs_csv("deeplabv3_resnet50", "x1")
     with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
         for i, fp in enumerate(glob.glob("profiles/*.yml")):
             _, fn = os.path.split(fp)
