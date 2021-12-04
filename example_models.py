@@ -181,33 +181,38 @@ def make_toy_model(batch_size, hw):
 def make_vision_model(model_name, batch_size=1, hw=64):
     if "inception" in model_name:
         hw = 128
+    if "alexnet" in model_name:
+        hw = 64
+    print(model_name)
     with torch.no_grad():
         model = vision_models(model_name).eval()
         x = torch.rand((batch_size, 3, hw, hw))
         y = torch.jit.trace(model, (x,), strict=False)
-
-    y.save(f"models/{model_name}.pt")
+        y.save(f"models/{model_name}.pt")
 
 
 import multiprocessing
 
 
 def make_all_vision_models(batch_size, hw):
+    from main import with_log
+
     modelss = _vision_models()
     with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
         for name, model_fn in modelss.items():
-            print(name)
-            pool.apply_async(make_vision_model, (name, batch_size, hw))
+            pool.apply_async(with_log, (make_vision_model, (name, batch_size, hw)))
         pool.close()
         pool.join()
 
 
 def make_transformers():
+    from main import with_log
+
     with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
         for batch_size in [1, 2, 4, 8, 16, 32, 64]:
             for hw in [1, 2, 4, 8]:
-                pool.apply_async(make_bert, (batch_size, hw))
-                # pool.apply_async(make_gpt, (batch_size, hw))
+                pool.apply_async(with_log, (make_bert, (batch_size, hw)))
+                pool.apply_async(make_gpt, (batch_size, hw))
         pool.close()
         pool.join()
 
@@ -216,15 +221,25 @@ def test_bert_jit_model():
     with torch.no_grad():
         inps = make_bert_input(5, 5)
         print(inps)
-        model = torch.jit.load("/home/mlevental/dev_projects/pytorch_memory_planning/models/small_bert.pt")
+        model = torch.jit.load(
+            "/home/mlevental/dev_projects/pytorch_memory_planning/models/small_bert.pt"
+        )
         print(model.code)
         print(model.graph)
         # out = model(*inps)
     # print(out)
 
+
+def test_alexnet():
+    from main import with_log
+
+    with_log(make_vision_model, ("alexnet", 1, 32))
+
+
 if __name__ == "__main__":
-    make_dcgan(1, 64)
+    # make_dcgan(1, 64)
     make_transformers()
+    # make_vision_model("alexnet", 1, 32)
     make_all_vision_models(1, 32)
 
 #

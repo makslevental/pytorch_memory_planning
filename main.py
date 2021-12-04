@@ -23,7 +23,10 @@ from strategies import (
     GapPriority,
     verify_allocation,
     PlannedAlloc,
-    gergov, make_df_from_reqs, solve_mip, ortools_mincost_flow
+    gergov,
+    make_df_from_reqs,
+    solve_mip,
+    ortools_mincost_flow,
 )
 
 
@@ -45,13 +48,15 @@ def plan_greedy_strats(req_mem_allocs_df, model_name):
         greedy_by_size_smallest_gap = greedy_by_size(req_mem_allocs_df)
     with Timer(model_name, "greedy_by_size_first_gap") as _:
         greedy_by_size_first_gap = greedy_by_size(
-            req_mem_allocs_df, gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST)
+            req_mem_allocs_df,
+            gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST),
         )
     with Timer(model_name, "greedy_by_longest_smallest_gap") as _:
         greedy_by_longest_smallest_gap = greedy_by_longest(req_mem_allocs_df)
     with Timer(model_name, "greedy_by_longest_first_gap") as _:
         greedy_by_longest_first_gap = greedy_by_longest(
-            req_mem_allocs_df, gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST)
+            req_mem_allocs_df,
+            gap_finder=partial(find_gap, GAP_PRIORITY=GapPriority.FIRST),
         )
 
     return {
@@ -70,11 +75,7 @@ def plan_programming_strats(req_mem_allocs_df, model_name):
     with Timer(model_name, "mincost_flow"):
         mincost_flow = ortools_mincost_flow(req_mem_allocs_df)
 
-    return {
-        "csp": csp,
-        "mip": mip,
-        "mincost_flow": mincost_flow
-    }
+    return {"csp": csp, "mip": mip, "mincost_flow": mincost_flow}
 
 
 def plan_other_strats(req_mem_allocs_df, model_name, req_mem_allocs):
@@ -107,7 +108,9 @@ def maybe_make_dir(dir):
 
 
 def make_planned_allocs_csv(model_name, params=None):
-    ops_dict = load_ops_yaml(f"{model_name}.{params}" if params is not None else f"{model_name}")
+    ops_dict = load_ops_yaml(
+        f"{model_name}.{params}" if params is not None else f"{model_name}"
+    )
     ops_dict = parse_ops_dict(ops_dict)
     _, _, names_to_allocs = get_call_chains(ops_dict)
     lvr_to_req_plus_root_caller = export_memory_reqs(ops_dict, names_to_allocs)
@@ -147,7 +150,7 @@ def make_planned_allocs_csv(model_name, params=None):
 
 
 def with_log(fn, args):
-    sys.stderr = open(f"logs/{'.'.join(args)}.err", "w")
+    sys.stderr = open(f"logs/{'.'.join(map(str, args))}.err", "w")
     # sys.stdout = open(f"logs/{'.'.join(args)}.log", "w")
     try:
         fn(*args)

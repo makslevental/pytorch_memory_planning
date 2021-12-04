@@ -282,7 +282,9 @@ def label_pointers(ops_dict):
 
     known_aliases = set()
 
-    def handle_tensor(call, arg_or_ret, arg_or_ret_typ, parent_args_or_rets, parent_args_or_rets_names):
+    def handle_tensor(
+        call, arg_or_ret, arg_or_ret_typ, parent_args_or_rets, parent_args_or_rets_names
+    ):
         nonlocal new_constant
         nonlocal known_aliases, ptr_addr_to_name
         # get names from "parent" (caller)
@@ -296,7 +298,9 @@ def label_pointers(ops_dict):
                 return
             if arg_or_ret in ptr_addr_to_name:
                 arg_or_ret_name = ptr_addr_to_name[arg_or_ret]
-            elif isinstance(arg_or_ret_typ, ListType) and isinstance(arg_or_ret_typ.getElementType(), TensorType):
+            elif isinstance(arg_or_ret_typ, ListType) and isinstance(
+                arg_or_ret_typ.getElementType(), TensorType
+            ):
                 assert isinstance(arg_or_ret, tuple) or isinstance(arg_or_ret, list)
                 for t in arg_or_ret:
                     assert t in ptr_addr_to_name
