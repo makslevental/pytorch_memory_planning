@@ -879,7 +879,7 @@ def solve_csp(required_allocs: pd.DataFrame):
     model.Minimize(total_size)
 
     solver = cp_model.CpSolver()
-    # solver.parameters.max_time_in_seconds = 1000.0
+    solver.parameters.max_time_in_seconds = 1000.0
     status = solver.Solve(model)
 
     # # https://github.com/google/or-tools/blob/stable/ortools/sat/doc/model.md#model-copy
