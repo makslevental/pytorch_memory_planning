@@ -5,6 +5,7 @@ import traceback
 from functools import partial
 from itertools import chain
 from typing import List
+import multiprocessing
 
 from memory_observer import (
     load_ops_yaml,
