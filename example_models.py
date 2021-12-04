@@ -34,7 +34,7 @@ def make_bert_input(batch_size, hw):
 # - gpt2-xl: 48
 
 
-def make_gpt(batch_size, hw):
+def make_gpt(name, batch_size, hw):
     with torch.no_grad():
         model = GPT2LMHeadModel.from_pretrained("gpt2")
         tokens_tensor, segments_tensors = make_bert_input(batch_size, hw)
@@ -61,7 +61,7 @@ def make_gpt(batch_size, hw):
         # torch.jit.save(traced_model, f"models/gpt2-large.x{batch_size}.y{hw}.pt")
 
 
-def make_bert(batch_size, hw):
+def make_bert(name, batch_size, hw):
     with torch.no_grad():
         inp = make_bert_input(batch_size, hw)
         config = BertConfig(
@@ -109,7 +109,7 @@ def make_bert(batch_size, hw):
         torch.jit.save(traced_model, f"models/small_bert.x{batch_size}.y{hw}.pt")
 
 
-def make_dcgan(batch_size, hw):
+def make_dcgan(name, batch_size, hw):
     model = torch.hub.load("facebookresearch/pytorch_GAN_zoo:hub", "DCGAN")
     gnet = model.getNetD()
     t = torch.rand((batch_size, 3, hw, hw))
@@ -211,8 +211,8 @@ def make_transformers():
     with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
         for batch_size in [1, 2, 4, 8, 16, 32, 64]:
             for hw in [1, 2, 4, 8]:
-                pool.apply_async(with_log, (make_bert, (batch_size, hw)))
-                pool.apply_async(make_gpt, (batch_size, hw))
+                pool.apply_async(with_log, (make_bert, ("bert", batch_size, hw)))
+                pool.apply_async(with_log, (make_gpt, ("gpt", batch_size, hw)))
         pool.close()
         pool.join()
 
@@ -237,10 +237,9 @@ def test_alexnet():
 
 
 if __name__ == "__main__":
-    # make_dcgan(1, 64)
-    make_transformers()
-    # make_vision_model("alexnet", 1, 32)
+    make_dcgan("dcgan", 1, 64)
     make_all_vision_models(1, 32)
+    make_transformers()
 
 #
 #     def _conv_forward(self, input: Tensor, weight: Tensor, bias: Optional[Tensor]):
