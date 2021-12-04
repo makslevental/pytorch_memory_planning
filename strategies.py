@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from ncls import NCLS
+from ortools.graph import pywrapgraph
 from ortools.linear_solver import pywraplp
 from ortools.sat.python import cp_model
 from z3 import Optimize, Bools, Not, And
@@ -42,7 +43,7 @@ def overlap(a, b, c, d):
         return False
 
 
-@dataclass(repr=True, eq=True, order=True, unsafe_hash=False, frozen=False)
+@dataclass(repr=True, eq=True, order=True, unsafe_hash=True, frozen=False)
 class LiveRange:
     begin: int
     end: int
@@ -449,7 +450,13 @@ def gergov(required_allocs: pd.DataFrame) -> List[PlannedAlloc]:
 
     def if_there_exists(pick_idx):
         # without sorting by start of interval this does poorly
-        for row in J[J.index.overlaps(pick_idx)].itertuples():
+        JJ = J[J.index.overlaps(pick_idx)]
+        if JJ.empty:
+            return None
+        if H.empty:
+            return next(JJ.itertuples())
+
+        for row in JJ.itertuples():
             # there exists row that doesn't overlap with any in H
             if H.index.overlaps(row.Index).sum() == 0:
                 return row
@@ -547,7 +554,7 @@ def gergov(required_allocs: pd.DataFrame) -> List[PlannedAlloc]:
 
     planned_allocs = []
     for (s, r, c), w in alpha.items():
-        lvr = LiveRange(r, c - 1)
+        lvr = LiveRange(r, c)
         mem_region = MemRegion(w, s)
         planned_allocs.append(PlannedAlloc(lvr, mem_region))
     return planned_allocs
@@ -595,6 +602,142 @@ def draw_nx(G):
     plt.show()
 
 
+def ortools_mincost_flow(required_allocs: pd.DataFrame):
+    min_cost_flow = pywrapgraph.SimpleMinCostFlow()
+    S = "S"
+    T = "T"
+    node_to_idx = {S: 0, T: 1}
+    idx_to_node = {0: S, 1: T}
+    edges_strs = {}
+    for row in required_allocs.itertuples():
+        L = f"L{row.Index[0]}"
+        node_to_idx[L] = len(node_to_idx)
+        idx_to_node[node_to_idx[L]] = L
+        R = f"R{row.Index[0]}"
+        node_to_idx[R] = len(node_to_idx)
+        idx_to_node[node_to_idx[R]] = R
+
+        edges_strs[S, R] = (row.mem_size, 1)
+        edges_strs[S, L] = (0, 1)
+        edges_strs[R, T] = (0, 1)
+
+    ids = np.arange(len(required_allocs))
+    live_range_ncls = NCLS(
+        starts=required_allocs.begin.values,
+        ends=required_allocs.end.values + 1,
+        ids=ids,
+    )
+    edge_list = np.array(
+        live_range_ncls.all_overlaps_both(
+            starts=required_allocs.begin.values,
+            ends=required_allocs.end.values + 1,
+            indexes=ids,
+        )
+    )
+    edge_list = edge_list.T.astype(order="C", dtype=edge_list.dtype)
+    all_pairs = np.array(np.meshgrid(ids, ids)).T.reshape(-1, 2)
+    non_overlap = tuple_set_diff(all_pairs, edge_list)
+    directed_edges = non_overlap[non_overlap[:, 0] < non_overlap[:, 1]]
+
+    us = directed_edges[:, 0]
+    vs = directed_edges[:, 1]
+
+    L = np.array(["L"])
+    R = np.array(["R"])
+    Ls = L.astype(object) + us.astype(str)
+    Rs = R.astype(object) + vs.astype(str)
+
+    diff = (
+        required_allocs.mem_size.iloc[vs].values
+        - required_allocs.mem_size.iloc[us].values
+    )
+    diff[diff < 0] = 0
+    costs_per_edge = np.array([Ls, Rs, diff]).T
+    for L, R, c in costs_per_edge:
+        edges_strs[L, R] = (c, 1)
+
+    for (L, R), (w, c) in edges_strs.items():
+        start, end = node_to_idx[L], node_to_idx[R]
+        min_cost_flow.AddArcWithCapacityAndUnitCost(start, end, c, w)
+
+    # Add node supply.
+    min_cost_flow.SetNodeSupply(node_to_idx[S], len(required_allocs))
+    min_cost_flow.SetNodeSupply(node_to_idx[T], -len(required_allocs))
+    for idx, node in idx_to_node.items():
+        if node in {S, T}:
+            continue
+        min_cost_flow.SetNodeSupply(idx, 0)
+
+    status = min_cost_flow.Solve()
+
+    if status != min_cost_flow.OPTIMAL:
+        warnings.warn("There was an issue with the min cost flow input.")
+        warnings.warn(f"Status: {status}")
+        return []
+
+    flow_dict = defaultdict(dict)
+    for i in range(min_cost_flow.NumArcs()):
+        cost = min_cost_flow.Flow(i) * min_cost_flow.UnitCost(i)
+        u, v = idx_to_node[min_cost_flow.Tail(i)], idx_to_node[min_cost_flow.Head(i)]
+        flow = min_cost_flow.Flow(i)
+        capacity = min_cost_flow.Capacity(i)
+        flow_dict[u][v] = flow
+
+    total_flow = 0
+    allocs = {}
+    reuses = {}
+
+    for v, flow in flow_dict[S].items():
+        if v[0] == R and flow == 1:
+            total_flow += 1
+            allocs[v[1:]] = required_allocs.iloc[int(v[1:])].mem_size
+
+    for u, vs in flow_dict.items():
+        if u[0] != L:
+            continue
+        for v, flow in vs.items():
+            if v[0] != R or flow != 1:
+                continue
+
+            shared_object = u[1:]
+            while shared_object not in allocs:
+                shared_object = reuses[shared_object]
+            reuses[v[1:]] = shared_object
+
+            avail = allocs[shared_object]
+            necessary = required_allocs.iloc[int(v[1:])].mem_size
+            if avail < necessary:
+                allocs[shared_object] = necessary
+
+    planned_allocs = []
+    planned_allocs_dict = {}
+    offset = 0
+    for alloc, size in allocs.items():
+        req = required_allocs.iloc[int(alloc)]
+        lvr = LiveRange(req.begin, req.end)
+        mem_region = MemRegion(offset, size)
+        offset += size
+        pl_alloc = PlannedAlloc(lvr, mem_region)
+        planned_allocs.append(pl_alloc)
+        planned_allocs_dict[alloc] = pl_alloc
+
+    for tens, shared_obj in reuses.items():
+        req = required_allocs.iloc[int(tens)]
+        lvr = LiveRange(req.begin, req.end)
+        avail = planned_allocs_dict[shared_obj]
+        assert not lvr.overlap(avail.lvr)
+        assert req.mem_size <= avail.mem_region.size, (
+            req.mem_size,
+            avail.mem_region.size,
+        )
+
+        reuse_start = planned_allocs_dict[shared_obj].mem_region.offset
+        mem_region = MemRegion(reuse_start, req.mem_size)
+        planned_allocs.append(PlannedAlloc(lvr, mem_region))
+
+    return planned_allocs
+
+
 def mincost_flow(required_allocs: pd.DataFrame):
     G = nx.DiGraph()
     G.add_node("s", demand=-len(required_allocs))
@@ -609,7 +752,6 @@ def mincost_flow(required_allocs: pd.DataFrame):
         G.add_edge(f"r,{row.Index[0]}", "t", weight=0, capacity=1)
 
     ids = np.arange(len(required_allocs))
-
     live_range_ncls = NCLS(
         starts=required_allocs.begin.values,
         ends=required_allocs.end.values + 1,
@@ -623,40 +765,24 @@ def mincost_flow(required_allocs: pd.DataFrame):
         )
     )
     edge_list = edge_list.T.astype(order="C", dtype=edge_list.dtype)
-
     all_pairs = np.array(np.meshgrid(ids, ids)).T.reshape(-1, 2)
-
     non_overlap = tuple_set_diff(all_pairs, edge_list)
+    directed_edges = non_overlap[non_overlap[:, 0] < non_overlap[:, 1]]
 
-    # for i, l in enumerate(req_mem_allocs):
-    #     for j, r in enumerate(req_mem_allocs[i:], start=i):
-    #         if not l.lvr.overlap(r.lvr):
-    #             print(i, j)
-    # #             print(l.size, r.size)
-    # #             print(required_allocs.iloc[i].mem_size, required_allocs.iloc[j].mem_size)
-    # #             print()
-    # #             # G.add_edge(
-    # #             #     f"l,{i}", f"r,{j}", weight=max(0, r.size - l.size), capacity=1
-    # #             # )
-    # #             G.add_edge(
-    # #                 f"l,{i}", f"r,{j}", weight=max(0, int(required_allocs.iloc[j].mem_size - required_allocs.iloc[i].mem_size)),
-    # #                 capacity=1
-    # #             )
-    # # print("**********************")
-    for u, v in non_overlap:
-        if u >= v:
-            continue
-        G.add_edge(
-            f"l,{u}",
-            f"r,{v}",
-            weight=max(
-                0,
-                int(
-                    required_allocs.iloc[v].mem_size - required_allocs.iloc[u].mem_size
-                ),
-            ),
-            capacity=1,
-        )
+    l = np.array(["l,"])
+    r = np.array(["r,"])
+    us = directed_edges[:, 0]
+    vs = directed_edges[:, 1]
+    ls = l.astype(object) + us.astype(np.str)
+    rs = r.astype(object) + vs.astype(np.str)
+    diff = (
+        required_allocs.mem_size.iloc[vs].values
+        - required_allocs.mem_size.iloc[us].values
+    )
+    diff[diff < 0] = 0
+    diffs = [{"weight": d, "capacity": 1} for d in diff]
+    weighted_edges = np.array([ls, rs, diffs]).T
+    G.add_edges_from(weighted_edges)
 
     flow_dict = nx.min_cost_flow(G)
     total_flow = 0
@@ -943,7 +1069,8 @@ def test_resnet18():
     trace_json = json.load(open("traces/resnet18.1x3x100x100.json"))
     req_mem_allocs = get_required_mem_allocs(trace_json)
     req_mem_allocs = make_df_from_reqs(req_mem_allocs)
-    test(req_mem_allocs)
+    res = gergov(req_mem_allocs)
+    assert verify_allocation(res)
 
 
 def test_lstm():
@@ -965,8 +1092,12 @@ def test_lstm():
             for i, ((begin, end), size) in enumerate(lvrs.items())
         ]
     )
-    test(req_mem_allocs)
+    res = gergov(req_mem_allocs)
+    # res = mincost_flow(req_mem_allocs)
+    assert verify_allocation(res)
+    # test(req_mem_allocs)
 
 
 if __name__ == "__main__":
+    # test_lstm()
     test_resnet18()
