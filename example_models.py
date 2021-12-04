@@ -223,16 +223,10 @@ def test_bert_jit_model():
     # print(out)
 
 if __name__ == "__main__":
-    # make_transformers()
-    # pass
-    # r = resnet18()
-    # print(thnn_conv2d)
-    # make_dcgan(1, 64)
-    # make_transformers()
+    make_dcgan(1, 64)
+    make_transformers()
     make_all_vision_models(1, 32)
-    # make_vision_model("inception_v3", 1, 32)
 
-    # make_toy_model()
 #
 #     def _conv_forward(self, input: Tensor, weight: Tensor, bias: Optional[Tensor]):
 # # (Tensor self, Tensor weight, int[2] kernel_size, Tensor? bias, int[2] stride, int[2] padding) -> (Tensor output, Tensor finput)
