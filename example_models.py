@@ -44,21 +44,21 @@ def make_gpt(name, batch_size, hw):
         # torch.jit.save(traced_model, f"models/gpt2.pt")
         torch.jit.save(traced_model, f"models/gpt2.x{batch_size}.y{hw}.pt")
 
-        # model = GPT2LMHeadModel.from_pretrained("gpt2-medium")
-        # tokens_tensor, segments_tensors = make_bert_input(batch_size, hw)
-        # traced_model = torch.jit.trace(
-        #     model, (tokens_tensor, segments_tensors), strict=False, check_trace=False
-        # )
-        # # torch.jit.save(traced_model, f"models/gpt2-medium.pt")
-        # torch.jit.save(traced_model, f"models/gpt2-medium.x{batch_size}.y{hw}.pt")
-        #
-        # model = GPT2LMHeadModel.from_pretrained("gpt2-large")
-        # tokens_tensor, segments_tensors = make_bert_input(batch_size, hw)
-        # traced_model = torch.jit.trace(
-        #     model, (tokens_tensor, segments_tensors), strict=False, check_trace=False
-        # )
-        # # torch.jit.save(traced_model, f"models/gpt2-large.pt")
-        # torch.jit.save(traced_model, f"models/gpt2-large.x{batch_size}.y{hw}.pt")
+        model = GPT2LMHeadModel.from_pretrained("gpt2-medium")
+        tokens_tensor, segments_tensors = make_bert_input(batch_size, hw)
+        traced_model = torch.jit.trace(
+            model, (tokens_tensor, segments_tensors), strict=False, check_trace=False
+        )
+        # torch.jit.save(traced_model, f"models/gpt2-medium.pt")
+        torch.jit.save(traced_model, f"models/gpt2-medium.x{batch_size}.y{hw}.pt")
+
+        model = GPT2LMHeadModel.from_pretrained("gpt2-large")
+        tokens_tensor, segments_tensors = make_bert_input(batch_size, hw)
+        traced_model = torch.jit.trace(
+            model, (tokens_tensor, segments_tensors), strict=False, check_trace=False
+        )
+        # torch.jit.save(traced_model, f"models/gpt2-large.pt")
+        torch.jit.save(traced_model, f"models/gpt2-large.x{batch_size}.y{hw}.pt")
 
 
 def make_bert(name, batch_size, hw):
@@ -200,6 +200,7 @@ def make_all_vision_models(batch_size, hw):
     modelss = _vision_models()
     with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
         for name, model_fn in modelss.items():
+            print(name)
             pool.apply_async(with_log, (make_vision_model, (name, batch_size, hw)))
         pool.close()
         pool.join()
@@ -207,12 +208,13 @@ def make_all_vision_models(batch_size, hw):
 
 def make_transformers():
     from main import with_log
-
     with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
-        for batch_size in [1, 2, 4, 8, 16, 32, 64]:
-            for hw in [1, 2, 4, 8]:
+        for batch_size in range(5):
+            for hw in range(5):
+                print("bert", batch_size, hw)
                 pool.apply_async(with_log, (make_bert, ("bert", batch_size, hw)))
-                pool.apply_async(with_log, (make_gpt, ("gpt", batch_size, hw)))
+                print("gpt2", batch_size, hw)
+                pool.apply_async(with_log, (make_gpt, ("gpt2", batch_size, hw)))
         pool.close()
         pool.join()
 

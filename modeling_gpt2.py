@@ -181,7 +181,7 @@ class GPT2Attention(nn.Module):
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
 
         if self.scale_attn_weights:
-            attn_weights = attn_weights / (float(value.size(-1)) ** 0.5)
+            attn_weights = attn_weights / ((value.size(-1)) ** 0.5)
 
         if not self.is_cross_attention:
             # if only "normal" attention layer implements causal mask
@@ -733,8 +733,6 @@ class GPT2Model(GPT2PreTrainedModel):
 
         # GPT2Attention mask.
         if attention_mask is not None:
-            if batch_size <= 0:
-                raise ValueError("batch_size has to be defined and > 0")
             attention_mask = attention_mask.view(batch_size, -1)
             # We create a 3D attention mask from a 2D tensor mask.
             # Sizes are [batch_size, 1, 1, to_seq_length]
