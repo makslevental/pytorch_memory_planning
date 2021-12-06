@@ -86,12 +86,12 @@ def plan_greedy_strats(req_mem_allocs_df, model_name):
 def plan_programming_strats(req_mem_allocs_df, model_name):
     with Timer(model_name, "csp"):
         csp = solve_csp(req_mem_allocs_df)
-    with Timer(model_name, "mip"):
-        mip = solve_mip(req_mem_allocs_df)
+    # with Timer(model_name, "mip"):
+    #     mip = solve_mip(req_mem_allocs_df)
     with Timer(model_name, "mincost_flow"):
         mincost_flow = ortools_mincost_flow(req_mem_allocs_df)
 
-    return {"csp": csp, "mip": mip, "mincost_flow": mincost_flow}
+    return {"csp": csp, "mincost_flow": mincost_flow}
 
 
 def plan_other_strats(req_mem_allocs_df, model_name, req_mem_allocs):
