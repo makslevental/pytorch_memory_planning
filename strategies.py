@@ -308,22 +308,6 @@ def save_planned_allocs(allocs: List[PlannedAlloc], name):
 MemEvent = namedtuple("MemEvent", "ptr_addr size ts")
 
 
-# @dataclass
-# class MemEvent:
-#     ptr_addr: str
-#     size: int
-#     ts: int
-#
-#     # def __str__(self):
-#     #     return f"{self.ts}:{self.size}"
-#     #
-#     # def __repr__(self):
-#     #     return str(self)
-#
-#     def __hash__(self):
-#         return int(hashlib.sha256(str(self).encode("utf-8")).hexdigest(), 16) % 10 ** 8
-
-
 def solve_z3():
     a, b, c = Bools("a b c")
     o = Optimize()
@@ -415,7 +399,6 @@ def tuple_set_diff(A, B):
 
 
 def gergov(required_allocs: pd.DataFrame) -> List[PlannedAlloc]:
-    print("gergov", file=sys.stderr)
     w = [0]
     l = [required_allocs.begin.min()]
     r = [required_allocs.end.max()]
@@ -507,8 +490,8 @@ def gergov(required_allocs: pd.DataFrame) -> List[PlannedAlloc]:
         v.Index: pd.Interval(alphap[v.Index], alphap[v.Index] + v.s, "left")
         for v in VV.itertuples()
     }
-    live_range = pd.IntervalIndex([*alphapp.keys()], name="live_range")
-    mem_region = pd.IntervalIndex([*alphapp.values()], name="mem_region")
+    live_range = pd.IntervalIndex(list(alphapp.keys()), name="live_range")
+    mem_region = pd.IntervalIndex(list(alphapp.values()), name="mem_region")
     live_range_ncls = NCLS(
         starts=live_range.left.values,
         ends=(live_range.right + 1).values,
@@ -990,6 +973,22 @@ def solve_mip(required_allocs: pd.DataFrame):
 #     return inorder_of_decision_allocs, total_consumption
 
 
+import memory_planning
+
+
+def memory_planning_cpp(
+    required_allocs: pd.DataFrame, strategy: memory_planning.Strategy
+):
+    sorted_live_range_map = {}
+    for row in required_allocs.itertuples():
+        lvr = memory_planning.LiveRange(row.begin, row.end)
+        ulvr = memory_planning.UniqueLiveRange(lvr, str(row.Index[0]))
+        size = row.mem_size
+        sorted_live_range_map[ulvr] = size
+
+    return memory_planning.planMemory(sorted_live_range_map, strategy)
+
+
 def calculate_high_watermark(allocs: List[PlannedAlloc]):
     allocs.sort(key=lambda p: p.lvr.begin)
     peak = 0
@@ -1092,12 +1091,13 @@ def test_lstm():
             for i, ((begin, end), size) in enumerate(lvrs.items())
         ]
     )
-    res = gergov(req_mem_allocs)
-    # res = mincost_flow(req_mem_allocs)
-    assert verify_allocation(res)
+    res = memory_planning_cpp(req_mem_allocs, memory_planning.Strategy.GERGOV)
+    print(res)
+    # res = gergov(req_mem_allocs)
+    # assert verify_allocation(res)
     # test(req_mem_allocs)
 
 
 if __name__ == "__main__":
-    # test_lstm()
-    test_resnet18()
+    test_lstm()
+    # test_resnet18()

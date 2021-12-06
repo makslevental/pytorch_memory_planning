@@ -1,6 +1,5 @@
 import glob
 import json
-import warnings
 from collections import defaultdict, namedtuple
 from pprint import pprint
 from typing import Dict, Tuple
@@ -29,17 +28,20 @@ def find_idx(val, ls):
     return next(i for i, v in enumerate(ls) if v == val)
 
 
-def find_graph_top(ops_dict, model_name):
-    return next(t for t in ops_dict["calls"] if t["fn_name"] == model_name)
+def find_graph_top(ops_dict):
+    return next(t for t in ops_dict["calls"] if t["op_id"] == 1)
 
 
-def load_ops_yaml(model_name):
-    fix_yaml(model_name)
+def load_ops_yaml(model_name, params):
+    fix_yaml(f"{model_name}.{params}")
     import yaml
 
-    with open(f"profiles/{model_name}.yml", "r") as stream:
+    with open(f"profiles/{model_name}.{params}.yml", "r") as stream:
         ops_dict = yaml.load(stream, Loader=yaml.CLoader)
-    ops_dict["model_name"] = model_name
+    if "bert" in model_name or "gpt" in model_name:
+        ops_dict["model_name"] = f"{model_name}.{params}"
+    else:
+        ops_dict["model_name"] = f"{model_name}"
     return ops_dict
 
 
@@ -129,7 +131,7 @@ def parse_ops_dict(ops_dict):
             for i in range(0, len(op["args"]), 2):
                 op["returns"][0][op["args"][i]] = op["args"][i + 1]
             op["args types"] = [make_torch_type(a) for a in op["args types"]]
-        elif op["fn_name"] == "prim::ListConstruct":
+        elif op["fn_name"] in {"prim::ListConstruct", "prim::TupleConstruct"}:
             op["returns types"] = [make_torch_type("List", op["args types"][0])]
             op["args types"] = [make_torch_type(a) for a in op["args types"]]
             op["returns"] = [op["args"]]
@@ -150,11 +152,17 @@ def parse_ops_dict(ops_dict):
     name_order = {}
     i = 0
     for id, op in id_to_op.items():
+        if op["fn_name"] == "free":
+            continue
+        for name in ls_or_empty(op, "args names"):
+            i += 1
+            name_order[name] = (i, id)
+
         for name in ls_or_empty(op, "returns names"):
             i += 1
             name_order[name] = (i, id)
 
-    graph_top = find_graph_top(ops_dict, model_name)
+    graph_top = find_graph_top(ops_dict)
     graph_top["args types"] = [make_torch_type(typ) for typ in graph_top["args types"]]
     graph_top["args names"] = list(ops_dict["graph"]["$args"].keys())
     last_compute_op_id = next(
@@ -207,11 +215,15 @@ def parse_ops_dict(ops_dict):
     ptr_addr_to_name = {}
     for ptr, names in ptr_to_names.items():
         if len(names) > 1:
-            # case 1 function call with output name for allocation
+            # case 1 either tensor in or out
             if len(names) == 2:
-                assert "alloc" not in names[0]
-                assert "alloc" in names[1]
-                assert name_order[names[0]] < name_order[names[1]]
+                pass
+
+                # if ("alloc" not in names[0] and "alloc" in names[1]):
+                #     assert name_order[names[0]] < name_order[names[1]]
+                # elif ("alloc" in names[0] and "alloc" not in names[1]):
+                #     assert name_order[names[0]] > name_order[names[1]]
+
             # case 2 after an alloc, true aliasing by passing through function boundary
             else:
                 names = [
@@ -434,7 +446,7 @@ def label_pointers(ops_dict):
                 this_calls = call["calls"]
                 percolate(this_calls, this_args_or_rets, this_args_or_rets_names, rev)
 
-    graph_top_trace = find_graph_top(ops_dict, model_name)
+    graph_top_trace = find_graph_top(ops_dict)
     calls = graph_top_trace["calls"]
     args = graph_top_trace["args"]
     args_names = graph_top_trace["args names"]
@@ -549,7 +561,11 @@ def match_allocs_to_outs(ops_dict):
 
         call_chain = list(reversed(call_chains[alloc_name]))
         qualified_call_chain = []
-        op = id_to_op[call_chain[1]]
+
+        if len(call_chain) == 1:
+            op = ops_dict["graph_top_trace"]
+        else:
+            op = id_to_op[call_chain[1]]
         if len(op["returns names"]) == 1 and op["returns names"][0] in graph:
             out_name = op["returns names"][0]
             full_call = graph[out_name]
@@ -637,7 +653,10 @@ def match_allocs_to_outs(ops_dict):
     for chain, alloc_names in unique_call_chains.items():
         for alloc_name in alloc_names:
             alloc = names_to_allocs[alloc_name]
-            root_caller_op_id = call_chains[alloc_name][-2]  # -1 is the model name
+            if len(call_chains[alloc_name]) == 1:
+                root_caller_op_id = call_chains[alloc_name][0]  # -1 is the model name
+            else:
+                root_caller_op_id = call_chains[alloc_name][-2]  # -1 is the model name
             root_caller = id_to_op[root_caller_op_id]
             alloc["root_caller_fn_name"] = root_caller["fn_name"]
             alloc["ptr_tag"] = int(alloc["addr"].split("_")[1])
@@ -729,8 +748,9 @@ def get_call_chains(ops_dict):
 
 
 def main(model_name):
+    model_name, params = model_name.split(".", 1)
     print(model_name)
-    ops_dict = load_ops_yaml(model_name)
+    ops_dict = load_ops_yaml(model_name, params)
     ops_dict = parse_ops_dict(ops_dict)
     sorted_call_chain, grouped_allocs, names_to_allocs = get_call_chains(ops_dict)
     print_call_chains(sorted_call_chain, grouped_allocs, names_to_allocs, model_name)
@@ -742,9 +762,17 @@ def fix_yaml(model_name):
     gr = f_lines[0]
     if "graph:" in gr:
         return
-    gr = gr.replace("graph(", "").replace("):\n", "")
-    gr_fix = f"graph:\n  $args:\n    {gr}\n"
-    f_lines[0] = gr_fix
+    line2 = f_lines[1]
+    if "Tensor" in line2:
+        gr = gr.replace("graph(", "").replace(",\n", "")
+        line2 = line2.strip().replace("):", "")
+        gr_fix = f"graph:\n  $args:\n    {gr}\n    {line2}\n"
+        f_lines[0] = gr_fix
+        del f_lines[1]
+    else:
+        gr = gr.replace("graph(", "").replace("):\n", "")
+        gr_fix = f"graph:\n  $args:\n    {gr}\n"
+        f_lines[0] = gr_fix
     f.seek(0)
     f.writelines(f_lines)
 
@@ -782,4 +810,5 @@ def export_memory_reqs(
 
 
 if __name__ == "__main__":
-    main("regnet_x_16gf.x1")
+    # main("small_bert.x2.y2")
+    main("alexnet")

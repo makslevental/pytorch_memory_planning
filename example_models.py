@@ -44,54 +44,54 @@ def make_gpt(name, batch_size, hw):
         # torch.jit.save(traced_model, f"models/gpt2.pt")
         torch.jit.save(traced_model, f"models/gpt2.x{batch_size}.y{hw}.pt")
 
-        model = GPT2LMHeadModel.from_pretrained("gpt2-medium")
-        tokens_tensor, segments_tensors = make_bert_input(batch_size, hw)
-        traced_model = torch.jit.trace(
-            model, (tokens_tensor, segments_tensors), strict=False, check_trace=False
-        )
-        # torch.jit.save(traced_model, f"models/gpt2-medium.pt")
-        torch.jit.save(traced_model, f"models/gpt2-medium.x{batch_size}.y{hw}.pt")
-
-        model = GPT2LMHeadModel.from_pretrained("gpt2-large")
-        tokens_tensor, segments_tensors = make_bert_input(batch_size, hw)
-        traced_model = torch.jit.trace(
-            model, (tokens_tensor, segments_tensors), strict=False, check_trace=False
-        )
-        # torch.jit.save(traced_model, f"models/gpt2-large.pt")
-        torch.jit.save(traced_model, f"models/gpt2-large.x{batch_size}.y{hw}.pt")
+        # model = GPT2LMHeadModel.from_pretrained("gpt2-medium")
+        # tokens_tensor, segments_tensors = make_bert_input(batch_size, hw)
+        # traced_model = torch.jit.trace(
+        #     model, (tokens_tensor, segments_tensors), strict=False, check_trace=False
+        # )
+        # # torch.jit.save(traced_model, f"models/gpt2-medium.pt")
+        # torch.jit.save(traced_model, f"models/gpt2-medium.x{batch_size}.y{hw}.pt")
+        #
+        # model = GPT2LMHeadModel.from_pretrained("gpt2-large")
+        # tokens_tensor, segments_tensors = make_bert_input(batch_size, hw)
+        # traced_model = torch.jit.trace(
+        #     model, (tokens_tensor, segments_tensors), strict=False, check_trace=False
+        # )
+        # # torch.jit.save(traced_model, f"models/gpt2-large.pt")
+        # torch.jit.save(traced_model, f"models/gpt2-large.x{batch_size}.y{hw}.pt")
 
 
 def make_bert(name, batch_size, hw):
     with torch.no_grad():
-        inp = make_bert_input(batch_size, hw)
-        config = BertConfig(
-            vocab_size_or_config_json_file=32000,
-            hidden_size=768,
-            num_hidden_layers=12,
-            num_attention_heads=12,
-            intermediate_size=3072,
-            torchscript=True,
-        )
-        model = BertModel(config)
-        model.eval()
-        traced_model = torch.jit.trace(model, inp)
-        # torch.jit.save(traced_model, f"models/large_bert.pt")
-        torch.jit.save(traced_model, f"models/large_bert.x{batch_size}.y{hw}.pt")
-
-        inp = make_bert_input(batch_size, hw)
-        config = BertConfig(
-            vocab_size_or_config_json_file=32000 // 2,
-            hidden_size=768 // 2,
-            num_hidden_layers=12 // 2,
-            num_attention_heads=12 // 2,
-            intermediate_size=3072 // 2,
-            torchscript=True,
-        )
-        model = BertModel(config)
-        model.eval()
-        traced_model = torch.jit.trace(model, inp)
-        # torch.jit.save(traced_model, f"models/medium_bert.pt")
-        torch.jit.save(traced_model, f"models/medium_bert.x{batch_size}.y{hw}.pt")
+        # inp = make_bert_input(batch_size, hw)
+        # config = BertConfig(
+        #     vocab_size_or_config_json_file=32000,
+        #     hidden_size=768,
+        #     num_hidden_layers=12,
+        #     num_attention_heads=12,
+        #     intermediate_size=3072,
+        #     torchscript=True,
+        # )
+        # model = BertModel(config)
+        # model.eval()
+        # traced_model = torch.jit.trace(model, inp)
+        # # torch.jit.save(traced_model, f"models/large_bert.pt")
+        # torch.jit.save(traced_model, f"models/large_bert.x{batch_size}.y{hw}.pt")
+        #
+        # inp = make_bert_input(batch_size, hw)
+        # config = BertConfig(
+        #     vocab_size_or_config_json_file=32000 // 2,
+        #     hidden_size=768 // 2,
+        #     num_hidden_layers=12 // 2,
+        #     num_attention_heads=12 // 2,
+        #     intermediate_size=3072 // 2,
+        #     torchscript=True,
+        # )
+        # model = BertModel(config)
+        # model.eval()
+        # traced_model = torch.jit.trace(model, inp)
+        # # torch.jit.save(traced_model, f"models/medium_bert.pt")
+        # torch.jit.save(traced_model, f"models/medium_bert.x{batch_size}.y{hw}.pt")
 
         inp = make_bert_input(batch_size, hw)
         config = BertConfig(
@@ -208,13 +208,14 @@ def make_all_vision_models(batch_size, hw):
 
 def make_transformers():
     from main import with_log
+
     with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
-        for batch_size in range(5):
-            for hw in range(5):
-                print("bert", batch_size, hw)
-                pool.apply_async(with_log, (make_bert, ("bert", batch_size, hw)))
-                print("gpt2", batch_size, hw)
-                pool.apply_async(with_log, (make_gpt, ("gpt2", batch_size, hw)))
+        batch_size = 1
+        for hw in range(1, 10):
+            print("bert", batch_size, hw)
+            pool.apply_async(with_log, (make_bert, ("bert", batch_size, hw)))
+            print("gpt2", batch_size, hw)
+            pool.apply_async(with_log, (make_gpt, ("gpt2", batch_size, hw)))
         pool.close()
         pool.join()
 
@@ -237,6 +238,27 @@ def test_alexnet():
 
     with_log(make_vision_model, ("alexnet", 1, 32))
 
+
+names = """
+alexnet
+dcgan
+googlenet
+inception_v3
+mobilenet_v2
+resnet101
+resnet152
+resnet18
+resnet34
+resnet50
+shufflenet_v2_x2_0
+squeezenet1_0
+squeezenet1_1
+toy_model
+vgg11
+vgg11_bn
+wide_resnet101_2
+wide_resnet50_2
+""".strip().split()
 
 if __name__ == "__main__":
     make_dcgan("dcgan", 1, 64)

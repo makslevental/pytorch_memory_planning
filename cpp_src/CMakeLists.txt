@@ -9,3 +9,4 @@ include_directories(${JEMALLOC_INCLUDE_DIRS})
 
 add_subdirectory(jemalloc_bindings)
 add_subdirectory(runtime_patch)
+add_subdirectory(strategies)
