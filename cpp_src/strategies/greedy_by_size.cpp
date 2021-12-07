@@ -44,7 +44,7 @@ using Cmp = bool(
 size_t findGapOffset(
     UniqueLiveRange unalloced_ulvr,
     size_t size,
-    std::unordered_map<interval_t<size_t>, MemAllocation, interval_hash>
+    std::unordered_map<interval_t<size_t>, PlannedAlloc, interval_hash>
         current_allocations,
     interval_tree_t<size_t> current_allocation_tree,
     GAP_PRIORITY gap_priority) {
@@ -93,10 +93,10 @@ size_t findGapOffset(
   return best_offset;
 }
 
-std::vector<MemAllocation> orderAllocations(
-    std::unordered_map<interval_t<size_t>, MemAllocation, interval_hash>
+std::vector<PlannedAlloc> orderAllocations(
+    std::unordered_map<interval_t<size_t>, PlannedAlloc, interval_hash>
         current_allocations) {
-  std::vector<MemAllocation> ordered_allocations;
+  std::vector<PlannedAlloc> ordered_allocations;
   ordered_allocations.reserve(current_allocations.size());
   for (auto& item : current_allocations) {
     ordered_allocations.emplace_back(item.second);
@@ -113,7 +113,7 @@ std::vector<MemAllocation> orderAllocations(
   return ordered_allocations;
 }
 
-std::vector<MemAllocation> greedyBy(
+std::vector<PlannedAlloc> greedyBy(
     Cmp cmp,
     GAP_PRIORITY gap_priority,
     const SortedLiveRangeMap<size_t>& sorted_reqs) {
@@ -121,7 +121,7 @@ std::vector<MemAllocation> greedyBy(
       sorted_reqs.begin(), sorted_reqs.end());
   std::sort(
       sorted_size_live_ranges.begin(), sorted_size_live_ranges.end(), cmp);
-  std::unordered_map<interval_t<size_t>, MemAllocation, interval_hash>
+  std::unordered_map<interval_t<size_t>, PlannedAlloc, interval_hash>
       current_allocations;
   //  for (const auto& item : sorted_size_live_ranges) {
   //    all_sizes.insert({{item.first.lvr.begin, item.first.lvr.end},
@@ -147,25 +147,74 @@ std::vector<MemAllocation> greedyBy(
   return orderAllocations(current_allocations);
 }
 
-std::vector<MemAllocation> greedyBySizeWithSmallestGap(
+std::vector<PlannedAlloc> greedyBySizeWithSmallestGap(
     const SortedLiveRangeMap<size_t>& live_ranges) {
   return greedyBy(sizeCmp, GAP_PRIORITY::SMALLEST, live_ranges);
 }
 
-std::vector<MemAllocation> greedyBySizeWithFirstGap(
+std::vector<PlannedAlloc> greedyBySizeWithFirstGap(
     const SortedLiveRangeMap<size_t>& live_ranges) {
   return greedyBy(sizeCmp, GAP_PRIORITY::FIRST, live_ranges);
 }
 
-std::vector<MemAllocation> greedyByLongestAndSizeWithSmallestGap(
+std::vector<PlannedAlloc> greedyByLongestAndSizeWithSmallestGap(
     const SortedLiveRangeMap<size_t>& live_ranges) {
   return greedyBy(lenCmp, GAP_PRIORITY::SMALLEST, live_ranges);
 }
 
-std::vector<MemAllocation> greedyByLongestAndSizeWithFirstGap(
+std::vector<PlannedAlloc> greedyByLongestAndSizeWithFirstGap(
     const SortedLiveRangeMap<size_t>& live_ranges) {
   return greedyBy(lenCmp, GAP_PRIORITY::FIRST, live_ranges);
 }
+
+std::vector<PlannedAlloc> bump_allocator(
+    const SortedLiveRangeMap<size_t>& live_ranges) {
+    std::vector<std::tuple<std::string, size_t, size_t>> mem_events;
+    mem_events.reserve(2*live_ranges.size());
+
+    for (auto& item: live_ranges) {
+        auto ptr_addr = item.first.id;
+        auto begin = item.first.lvr.begin;
+        auto end = item.first.lvr.end;
+        auto size = item.second;
+        mem_events.emplace_back(std::make_tuple(ptr_addr, begin, size));
+        mem_events.emplace_back(std::make_tuple(ptr_addr, end, -size));
+    }
+
+    std::sort(mem_events.begin(), mem_events.end(), [](auto m1, auto m2) {
+        return std::get<0>(m1) < std::get<0>(m2);
+    });
+
+    std::unordered_map<std::string, PlannedAlloc> planned_allocs;
+
+    int next_offset = 0;
+    int curr_allocs = 0;
+
+    std::vector<PlannedAlloc> real_planned_allocs;
+    real_planned_allocs.reserve(planned_allocs.size());
+    for (auto& item: mem_events) {
+        auto ptr_addr = std::get<0>(item);
+        auto ts = std::get<1>(item);
+        auto size = std::get<2>(item);
+        if (size > 0) {
+            planned_allocs.insert({
+                ptr_addr, {{{ts, 0}, ptr_addr}, {next_offset, size}}
+            });
+            next_offset += size;
+            curr_allocs += 1;
+        } else {
+            planned_allocs[ptr_addr].ulvr.lvr.end = ts;
+            real_planned_allocs.push_back(planned_allocs[ptr_addr]);
+        }
+        curr_allocs -= 1;
+        if (curr_allocs == 0) {
+            next_offset = 0;
+        }
+    }
+
+  return real_planned_allocs;
+}
+
 
 
 typedef std::tuple<size_t, size_t, size_t> triple;
@@ -197,7 +246,7 @@ std::unordered_map<std::string, int> greedy_color(
   return color;
 }
 
-std::vector<MemAllocation> gergov(
+std::vector<PlannedAlloc> gergov(
     const SortedLiveRangeMap<size_t>& live_ranges) {
   auto l = std::min_element(
                live_ranges.begin(),
@@ -368,12 +417,12 @@ std::vector<MemAllocation> gergov(
     alpha[trip] = alphap[trip] + item.second * maxj;
   }
 
-  std::vector<MemAllocation> planned_allocs;
+  std::vector<PlannedAlloc> planned_allocs;
   for (auto& item : alpha) {
     auto s = std::get<0>(item.first);
     auto r = std::get<1>(item.first);
     auto c = std::get<2>(item.first);
-    MemAllocation m({{r, c}, {item.second, s}});
+    PlannedAlloc m({{r, c}, {item.second, s}});
     planned_allocs.push_back(m);
   }
 

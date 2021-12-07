@@ -9,7 +9,7 @@ from transformers import BertTokenizer, BertModel, BertConfig
 from modeling_gpt2 import GPT2LMHeadModel
 
 
-def make_bert_input(batch_size, hw):
+def make_bert_input(batch_size):
     enc = BertTokenizer.from_pretrained("bert-base-uncased")
 
     # Tokenizing input text
@@ -23,8 +23,8 @@ def make_bert_input(batch_size, hw):
     segments_ids = [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1]
 
     # Creating a dummy input
-    tokens_tensor = torch.tensor([indexed_tokens * hw] * batch_size)
-    segments_tensors = torch.tensor([segments_ids * hw] * batch_size)
+    tokens_tensor = torch.tensor([indexed_tokens] * batch_size)
+    segments_tensors = torch.tensor([segments_ids] * batch_size)
     return tokens_tensor, segments_tensors
 
 
@@ -93,7 +93,7 @@ def make_bert(name, batch_size, hw):
         # # torch.jit.save(traced_model, f"models/medium_bert.pt")
         # torch.jit.save(traced_model, f"models/medium_bert.x{batch_size}.y{hw}.pt")
 
-        inp = make_bert_input(batch_size, hw)
+        inp = make_bert_input(batch_size)
         config = BertConfig(
             vocab_size_or_config_json_file=32000 // 4,
             hidden_size=768 // 4,
@@ -114,8 +114,7 @@ def make_dcgan(name, batch_size, hw):
     gnet = model.getNetD()
     t = torch.rand((batch_size, 3, hw, hw))
     traced_model = torch.jit.trace(gnet, (t,))
-    torch.jit.save(traced_model, f"models/dcgan.pt")
-    # torch.jit.save(traced_model, f"models/dcgan.x{batch_size}.y{hw}.pt")
+    torch.jit.save(traced_model, f"models/dcgan.x1.y{hw}.pt")
 
 
 def make_unet(batch_size, hw):
@@ -178,30 +177,43 @@ def make_toy_model(batch_size, hw):
     y.save(f"models/toy_model.pt")
 
 
-def make_vision_model(model_name, batch_size=1, hw=64):
-    if "inception" in model_name:
-        hw = 128
-    if "alexnet" in model_name:
-        hw = 64
-    print(model_name)
+def make_vision_model(model_name, hw=64):
+    if "inception" in model_name and hw < 128:
+        return
+    if "alexnet" in model_name and hw < 64:
+        return
     with torch.no_grad():
         model = vision_models(model_name).eval()
-        x = torch.rand((batch_size, 3, hw, hw))
+        x = torch.rand((1, 3, hw, hw))
         y = torch.jit.trace(model, (x,), strict=False)
+        model_name = f"{model_name}.x1.y{hw}"
         y.save(f"models/{model_name}.pt")
 
 
 import multiprocessing
 
+import_models = open("/important_models.txt").read().strip().split()
 
-def make_all_vision_models(batch_size, hw):
+
+def make_all_vision_models():
     from main import with_log
 
     modelss = _vision_models()
     with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
         for name, model_fn in modelss.items():
-            print(name)
-            pool.apply_async(with_log, (make_vision_model, (name, batch_size, hw)))
+            if name not in import_models:
+                continue
+            for hw in [32, 64, 128, 256, 512]:
+                print(name, hw)
+                pool.apply_async(make_vision_model, (name, hw))
+                # make_vision_model(name, hw)
+        pool.close()
+        pool.join()
+
+    with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+        for hw in [32, 64, 128, 256, 512]:
+            print(name, hw)
+            pool.apply_async(with_log, (make_dcgan, (name, 1, hw)))
         pool.close()
         pool.join()
 
@@ -239,31 +251,10 @@ def test_alexnet():
     with_log(make_vision_model, ("alexnet", 1, 32))
 
 
-names = """
-alexnet
-dcgan
-googlenet
-inception_v3
-mobilenet_v2
-resnet101
-resnet152
-resnet18
-resnet34
-resnet50
-shufflenet_v2_x2_0
-squeezenet1_0
-squeezenet1_1
-toy_model
-vgg11
-vgg11_bn
-wide_resnet101_2
-wide_resnet50_2
-""".strip().split()
-
 if __name__ == "__main__":
-    make_dcgan("dcgan", 1, 64)
-    make_all_vision_models(1, 32)
-    make_transformers()
+    make_all_vision_models()
+    # make_transformers()
+    make_bert("bert", 5, 1)
 
 #
 #     def _conv_forward(self, input: Tensor, weight: Tensor, bias: Optional[Tensor]):

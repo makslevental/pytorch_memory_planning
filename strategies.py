@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 from ncls import NCLS
+from numba import njit
 from ortools.graph import pywrapgraph
 from ortools.linear_solver import pywraplp
 from ortools.sat.python import cp_model
@@ -1091,7 +1092,7 @@ def test_lstm():
             for i, ((begin, end), size) in enumerate(lvrs.items())
         ]
     )
-    res = memory_planning_cpp(req_mem_allocs, memory_planning.Strategy.GERGOV)
+    res = bump_allocator(req_mem_allocs)
     print(res)
     # res = gergov(req_mem_allocs)
     # assert verify_allocation(res)

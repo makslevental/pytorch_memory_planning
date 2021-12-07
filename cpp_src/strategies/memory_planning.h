@@ -13,7 +13,8 @@ enum class Strategy {
   GREEDY_BY_SIZE_WITH_FIRST_GAP,
   GREEDY_BY_LONGEST_AND_SIZE_WITH_SMALLEST_GAP,
   GREEDY_BY_LONGEST_AND_SIZE_WITH_FIRST_GAP,
-  GERGOV
+  GERGOV,
+  BUMP
 };
 
 inline size_t compute_aligned_tensor_size(size_t nbytes) {
@@ -35,6 +36,8 @@ inline const char* toString(Strategy s) {
       return "GREEDY_BY_LONGEST_AND_SIZE_WITH_FIRST_GAP";
     case Strategy::GERGOV:
       return "GERGOV";
+    case Strategy::BUMP:
+      return "BUMO";
     default:
       return "UNKNOWN STRATEGY";
   }
@@ -128,25 +131,25 @@ struct liveRangeEndCmp {
 template <typename T>
 using SortedLiveRangeMap = std::map<UniqueLiveRange, T, liveRangeStartCmp>;
 
-struct MemAllocation {
+struct PlannedAlloc {
   UniqueLiveRange ulvr;
   MemRegion reg;
 };
 
 struct memAllocOffsetCmp {
   regionOffsetCmp cmp;
-  bool operator()(const MemAllocation& u1, const MemAllocation& u2) const {
+  bool operator()(const PlannedAlloc& u1, const PlannedAlloc& u2) const {
     return cmp(u1.reg, u2.reg);
   }
 };
 
-inline std::ostream& operator<<(std::ostream& str, MemAllocation rhs) {
+inline std::ostream& operator<<(std::ostream& str, PlannedAlloc rhs) {
   return str << rhs.ulvr << ", " << rhs.reg;
 }
 
-void printAllocations(std::vector<MemAllocation> allocations);
+void printAllocations(std::vector<PlannedAlloc> allocations);
 
-inline bool operator==(const MemAllocation lhs, const MemAllocation rhs) {
+inline bool operator==(const PlannedAlloc lhs, const PlannedAlloc rhs) {
   return lhs.ulvr == rhs.ulvr && lhs.reg == rhs.reg;
 }
 
@@ -169,7 +172,7 @@ inline bool valid_sub(size_t a, size_t b) {
 }
 
 // size, allocations
-using MemoryPlan = std::pair<size_t, std::vector<MemAllocation>>;
+using MemoryPlan = std::pair<size_t, std::vector<PlannedAlloc>>;
 
 MemoryPlan planMemory(
     SortedLiveRangeMap<size_t> managed_live_ranges,
@@ -236,8 +239,8 @@ struct hash<UniqueLiveRange> {
 };
 
 template <>
-struct hash<MemAllocation> {
-  size_t operator()(const MemAllocation& mem) const {
+struct hash<PlannedAlloc> {
+  size_t operator()(const PlannedAlloc& mem) const {
     return mem_hash::get_hash(mem.reg, mem.ulvr);
   }
 };

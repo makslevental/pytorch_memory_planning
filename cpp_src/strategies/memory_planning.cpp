@@ -47,15 +47,15 @@ bool overlapMemRegion(const MemRegion& reg1, const MemRegion& reg2) {
       reg2.offset + reg2.size);
 }
 
-bool overlapAllocs(const MemAllocation& m1, const MemAllocation& m2) {
+bool overlapAllocs(const PlannedAlloc& m1, const PlannedAlloc& m2) {
   return overlapLiveRange(m1.ulvr, m2.ulvr) && overlapMemRegion(m1.reg, m2.reg);
 }
 
 // stack all tensors end to end "as you see them" over the entire lifespan of
 // the plan
-std::vector<MemAllocation> naive(
+std::vector<PlannedAlloc> naive(
     SortedLiveRangeMap<size_t> managed_live_ranges) {
-  std::vector<MemAllocation> allocations;
+  std::vector<PlannedAlloc> allocations;
   allocations.reserve(managed_live_ranges.size());
   size_t offset = 0;
   for (const auto& item : managed_live_ranges) {
@@ -69,7 +69,7 @@ std::vector<MemAllocation> naive(
   return allocations;
 }
 
-void printAllocations(std::vector<MemAllocation> allocations) {
+void printAllocations(std::vector<PlannedAlloc> allocations) {
   std::cout << "\"allocations\": {\n";
   for (const auto& item : allocations) {
     std::cout << "(" << item.ulvr.lvr.begin << "," << item.ulvr.lvr.end << ")"
@@ -96,7 +96,7 @@ void printLiveRangesAndSizes(
 }
 
 // "high watermark" of memory
-size_t getTotalAllocationSize(std::vector<MemAllocation> allocations) {
+size_t getTotalAllocationSize(std::vector<PlannedAlloc> allocations) {
   size_t total_size = 0;
   for (const auto& alloc : allocations) {
     total_size = std::max(total_size, alloc.reg.offset + alloc.reg.size);
@@ -105,7 +105,7 @@ size_t getTotalAllocationSize(std::vector<MemAllocation> allocations) {
 }
 
 bool validateAllocations(
-    std::vector<MemAllocation> allocations,
+    std::vector<PlannedAlloc> allocations,
     SortedLiveRangeMap<size_t> managed_live_ranges,
     size_t total_size) {
   if (total_size >= (size_t)std::numeric_limits<int64_t>::max()) {
@@ -165,7 +165,7 @@ MemoryPlan planMemory(
     SortedLiveRangeMap<size_t> managed_live_ranges,
     Strategy strat) {
 
-  std::vector<MemAllocation> allocations;
+  std::vector<PlannedAlloc> allocations;
   switch (strat) {
     case Strategy::NAIVE: {
       allocations = naive(managed_live_ranges);
@@ -189,6 +189,10 @@ MemoryPlan planMemory(
     }
     case Strategy::GERGOV: {
       allocations = gergov(managed_live_ranges);
+      break;
+    }
+    case Strategy::BUMP: {
+      allocations = bump_allocator(managed_live_ranges);
       break;
     }
     default:
@@ -221,10 +225,10 @@ PYBIND11_MODULE(memory_planning, m) {
         .def_readwrite("offset", &UniqueLiveRange::lvr)
         .def_readwrite("size", &UniqueLiveRange::id);
 
-    py::class_<MemAllocation>(m, "MemAllocation")
+    py::class_<PlannedAlloc>(m, "PlannedAlloc")
 //        .def(py::init<LiveRange, MemRegion>())
-        .def_readwrite("ulvr", &MemAllocation::ulvr)
-        .def_readwrite("reg", &MemAllocation::reg);
+        .def_readwrite("ulvr", &PlannedAlloc::ulvr)
+        .def_readwrite("reg", &PlannedAlloc::reg);
 
     py::enum_<Strategy>(m, "Strategy")
         .value("NAIVE", Strategy::NAIVE)
@@ -233,6 +237,7 @@ PYBIND11_MODULE(memory_planning, m) {
         .value("GREEDY_BY_LONGEST_AND_SIZE_WITH_SMALLEST_GAP", Strategy::GREEDY_BY_LONGEST_AND_SIZE_WITH_SMALLEST_GAP)
         .value("GREEDY_BY_LONGEST_AND_SIZE_WITH_FIRST_GAP", Strategy::GREEDY_BY_LONGEST_AND_SIZE_WITH_FIRST_GAP)
         .value("GERGOV", Strategy::GERGOV)
+        .value("BUMP", Strategy::BUMP)
         .export_values();
 
     m.def("planMemory", &planMemory, "plan memory");

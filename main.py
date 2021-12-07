@@ -1,4 +1,3 @@
-import glob
 import multiprocessing
 import os
 import subprocess
@@ -10,13 +9,13 @@ from itertools import chain
 from typing import List
 
 import memory_planning
-from numpy import mean
+import pandas as pd
 
 from memory_observer import (
     load_ops_yaml,
     export_memory_reqs,
-    get_call_chains,
     parse_ops_dict,
+    get_call_chains,
 )
 from strategies import (
     greedy_by_size,
@@ -29,7 +28,6 @@ from strategies import (
     PlannedAlloc,
     gergov,
     make_df_from_reqs,
-    solve_mip,
     ortools_mincost_flow,
     memory_planning_cpp,
 )
@@ -45,7 +43,10 @@ class Timer:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         end = time.monotonic()
-        print(self.model, self.strategy, end - self.start, flush=True)
+        print(
+            ",".join(list(map(str, [self.model, self.strategy, end - self.start]))),
+            flush=True,
+        )
 
 
 def plan_greedy_strats(req_mem_allocs_df, model_name):
@@ -98,7 +99,10 @@ def plan_programming_strats(req_mem_allocs_df, model_name):
 
 def plan_other_strats(req_mem_allocs_df, model_name, req_mem_allocs):
     with Timer(model_name, "bump"):
-        bump = bump_allocator(req_mem_allocs)
+        memory_planning_cpp(
+            req_mem_allocs_df, memory_planning.BUMP
+        )
+    bump = bump_allocator(req_mem_allocs)
     with Timer(model_name, "gergov"):
         memory_planning_cpp(req_mem_allocs_df, memory_planning.GERGOV)
     gerg = gergov(req_mem_allocs_df)
@@ -119,33 +123,42 @@ def save_requirements_df(req_allocs_df, model_name, params):
     )
 
 
-def make_planned_allocs_csv(model_name, params=None, num_workers=1):
+def make_planned_allocs_csv(model_name, params):
     ops_dict = load_ops_yaml(model_name, params)
     ops_dict = parse_ops_dict(ops_dict)
     _, _, names_to_allocs = get_call_chains(ops_dict)
     lvr_to_req_plus_root_caller = export_memory_reqs(ops_dict, names_to_allocs)
     req_allocs = [req for _lvr, (req, _fn_name) in lvr_to_req_plus_root_caller.items()]
     req_allocs_df = make_df_from_reqs(req_allocs)
-    print(model_name, "num allocs", len(req_allocs_df), flush=True)
+    print(
+        ",".join(map(str, [model_name, params, "num allocs", len(req_allocs_df)])),
+        flush=True,
+    )
 
     strats = []
-    strats.append(plan_greedy_strats(req_allocs_df, model_name))
-    strats.append(plan_other_strats(req_allocs_df, model_name, req_allocs))
-    if len(req_allocs_df) < 10000:
-        strats.append(plan_programming_strats(req_allocs_df, model_name))
+    if not os.path.exists(
+            f"planned_allocs/{model_name}/{params}/greedy_by_size_first_gap.csv"
+    ):
+        strats.append(plan_greedy_strats(req_allocs_df, model_name + "." + params))
+    if not os.path.exists(f"planned_allocs/{model_name}/{params}/bump.csv"):
+        strats.append(
+            plan_other_strats(req_allocs_df, model_name + "." + params, req_allocs)
+        )
+    if not os.path.exists(f"planned_allocs/{model_name}/{params}/csp.csv"):
+        if len(req_allocs_df) < 10000:
+            strats.append(
+                plan_programming_strats(req_allocs_df, model_name + "." + params)
+            )
 
     for strat, plan in chain(*[s.items() for s in strats]):
         plan: List[PlannedAlloc]
         plan.sort(key=lambda p: p.lvr.begin)
         if not verify_allocation(plan):
-            print(f"{model_name} {strat} memory plan not valid")
+            print(f"{model_name}.{params} {strat} memory plan not valid", file=sys.stderr, flush=True)
         else:
             maybe_make_dir(f"planned_allocs/{model_name}")
-            if params is not None:
-                maybe_make_dir(f"planned_allocs/{model_name}/{params}")
-                fp = f"planned_allocs/{model_name}/{params}/{strat}.csv"
-            else:
-                fp = f"planned_allocs/{model_name}/{strat}.csv"
+            maybe_make_dir(f"planned_allocs/{model_name}/{params}")
+            fp = f"planned_allocs/{model_name}/{params}/{strat}.csv"
             with open(fp, "w") as f:
                 for p_alloc in plan:
                     if p_alloc.lvr not in lvr_to_req_plus_root_caller:
@@ -169,22 +182,30 @@ def with_log(fn, args):
         traceback.print_exc()
 
 
-from subprocess import Popen
+TWOS = [0, 3, 5]
+
+NUM_THREADS = str(multiprocessing.cpu_count())
+NUM_THREADS = "1"
 
 
-def run_cmd(cmd: List[str], out_pipe, err_pipe):
-    return Popen(cmd, stdout=out_pipe, stderr=err_pipe)
+def get_all_names(batch_sizes=[1]):
+    names = list(map(lambda x: x.strip(), open("important_models.txt").readlines()))
+    hws = [32, 64, 128, 256, 512]
+
+    for batch_size in batch_sizes:
+        for hw in hws:
+            for model_name in names:
+                if "inception" in model_name and hw < 128:
+                    continue
+                if "alexnet" in model_name and hw < 64:
+                    continue
+                if "dcgan" in model_name and hw < 64:
+                    continue
+                yield model_name, batch_size, hw
 
 
-def run_mem_experiments_per_model(
-        time_log,
-        err_log,
-        je_or_me,
+def run_all_mem_experiments(
         bin_path,
-        model_name,
-        warmup=10,
-        num_loops=10,
-        num_repeats=1,
 ):
     env = {
         "OPENBLAS_NUM_THREADS": "1",
@@ -192,79 +213,155 @@ def run_mem_experiments_per_model(
         "OMP_NUM_THREADS": "1",
         "MKL_NUM_THREADS": "1",
         "MKL_DEBUG_CPU_TYPE": "5",
+        # "MEMORY_DEBUG": "false",
     }
-
-    for num_workers_exp in range(7):
-        num_workers = 2 ** num_workers_exp
-        for batch_exp in range(7):
-            batch_size = 2 ** batch_exp
-            for hw_exp in range(7):
-                hw = 2 ** hw_exp
-                if "inception" in model_name and hw < 128:
-                    continue
-                if "alexnet" in model_name and hw < 64:
-                    continue
-                if "dcgan" in model_name and hw < 64:
-                    continue
-
-                cmd = [bin_path]
-                params = list(
-                    map(
-                        str,
-                        [
-                            je_or_me,
-                            model_name,
-                            "csp",
-                            num_workers,
-                            num_repeats,
-                            warmup,
-                            num_loops,
-                            batch_size,
-                            hw,
-                        ],
-                    )
-                )
-                cmd.extend(params)
-                print(" ".join(cmd))
-
-                proc = subprocess.Popen(
-                    cmd,
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                try:
-                    outs, errs = proc.communicate()
-                    outs = outs.decode().strip()
-                    time_log.write(f"{outs}\n")
-                    time_log.flush()
-                except Exception as e:
-                    proc.kill()
-                    outs, errs = proc.communicate()
-                    outs = outs.decode().strip()
-                    errs = errs.decode().strip()
-
-                    print(errs, file=sys.stderr)
-                    err_log.write(f"{cmd}; errs: {errs} outs: {outs}")
-                    err_log.flush()
-
-
-def run_all_mem_experiments(
-        bin_path,
-):
-    names = list(map(lambda x: x.strip(), open("model_names.txt").readlines()))
-    with open(f"times.csv", "w", buffering=1) as time_log, open(
+    print(" ".join([f"{k}={v}" for k, v in env.items()]))
+    names = list(get_all_names([1, 32, 64]))
+    num_repeats = 1
+    num_warmup = 10
+    nump_loops = 30
+    strat = "csp"
+    with open(f"memory_run_times.csv", "w", buffering=1) as time_log, open(
             f"err.log", "w", buffering=1
     ) as err_log:
-        time_log.write("je_or_me,model_name,batch_size,hw,total,ms_per_iter\n")
-        for je_or_me in ["me", "je"]:
-            for model_name in names:
-                print(model_name)
-                if "alex" not in model_name:
-                    continue
-                run_mem_experiments_per_model(
-                    time_log, err_log, je_or_me, bin_path, model_name
-                )
+        time_log.write(
+            "je_or_me,model_name,num_workers,batch_size,hw,num_total_iters,total,ms_per_iter\n"
+        )
+        for i, (model_name, batch_size, hw) in enumerate(names):
+            for num_workers in [1, 32, 64]:
+                for je_or_me in ["je", "me"]:
+                    model_fp = f"{os.getcwd()}/models/{model_name}.x1.y{hw}.pt"
+                    plan_fp = f"{os.getcwd()}/planned_allocs/{model_name}/x1.y{hw}/{strat}.csv"
+
+                    if not os.path.exists(plan_fp):
+                        plan_fp = f"{os.getcwd()}/planned_allocs/{model_name}/x1.y{hw}/greedy_by_size_first_gap.csv"
+                        if not os.path.exists(plan_fp):
+                            print(plan_fp, "doesn't exist wtf", file=sys.stderr)
+                            continue
+
+                    cmd = [bin_path]
+                    params = list(
+                        map(
+                            str,
+                            [
+                                je_or_me,
+                                model_name,
+                                strat,
+                                num_workers,
+                                num_repeats,
+                                num_warmup,
+                                nump_loops,
+                                batch_size,
+                                hw,
+                                model_fp,
+                                plan_fp,
+                            ],
+                        )
+                    )
+                    cmd.extend(params)
+                    print(" ".join(cmd), flush=True)
+                    df = pd.read_csv(plan_fp, names=["begin", "end", "offset", "size", "root_coller"])
+                    peak_usage = (df["offset"] + df["size"]).max() * batch_size * num_workers
+                    if peak_usage > 100 << 30:  # 100GB
+                        print(plan_fp, "will hit OOM", file=sys.stderr)
+                        continue
+                       
+                    proc = subprocess.Popen(
+                        cmd,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+                    try:
+                        outs, errs = proc.communicate()
+                        outs = outs.decode().strip()
+                        print(outs, flush=True)
+                        time_log.write(f"{outs}\n")
+                        time_log.flush()
+                    except Exception as e:
+                        proc.kill()
+                        outs, errs = proc.communicate()
+                        outs = outs.decode().strip()
+                        errs = errs.decode().strip()
+
+                        print(errs, file=sys.stderr, flush=True)
+                        err_log.write(f"{cmd}; errs: {errs} outs: {outs}")
+                        err_log.flush()
+
+
+def make_one_profile(bin_path, env, model_name, batch_size, hw):
+    cmd = [bin_path]
+    model_fp = f"{os.getcwd()}/models/{model_name}.x1.y{hw}.pt"
+    params = list(
+        map(
+            str,
+            ["NONE", model_name, "NONE", 0, 0, 0, 0, batch_size, hw, model_fp, "NONE"],
+        )
+    )
+    cmd.extend(params)
+    print(" ".join(cmd))
+
+    with open(
+            f"logs/{model_name}.x{batch_size}.y{hw}.err.log", "w", buffering=1
+    ) as err_log:
+        proc = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            outs, errs = proc.communicate()
+            outs = outs.decode().strip()
+        except Exception as e:
+            proc.kill()
+            outs, errs = proc.communicate()
+            outs = outs.decode().strip()
+            errs = errs.decode().strip()
+
+            print(errs, file=sys.stderr)
+            err_log.write(f"{cmd}; errs: {errs} outs: {outs}")
+            err_log.flush()
+
+    with open(
+            f"profiles/{model_name}.x{batch_size}.y{hw}.yml", "w", buffering=1
+    ) as profile:
+        profile.write(f"{outs}\n")
+        profile.flush()
+
+
+def make_profiles(bin_path):
+    env = {
+        "OPENBLAS_NUM_THREADS": NUM_THREADS,
+        "GOTO_NUM_THREADS": NUM_THREADS,
+        "OMP_NUM_THREADS": NUM_THREADS,
+        "MKL_NUM_THREADS": NUM_THREADS,
+        "MKL_DEBUG_CPU_TYPE": "5",
+        "MEMORY_DEBUG": "true",
+    }
+
+    with multiprocessing.Pool(multiprocessing.cpu_count() // 8) as pool:
+        for model_name, batch_size, hw in get_all_names():
+            fp = f"profiles/{model_name}.x{batch_size}.y{hw}.yml"
+            if os.path.exists(fp):
+                continue
+            # make_one_profile(bin_path, env, model_name, batch_size, hw)
+            pool.apply_async(
+                make_one_profile, (bin_path, env, model_name, batch_size, hw)
+            )
+        pool.close()
+        pool.join()
+
+
+def make_all_planned_allocs():
+    with multiprocessing.Pool(multiprocessing.cpu_count() // 4) as pool:
+        for model_name, batch_size, hw in get_all_names():
+            # make_planned_allocs_csv(model_name,  f"x{batch_size}.y{hw}")
+            pool.apply_async(
+                make_planned_allocs_csv, (model_name, f"x{batch_size}.y{hw}")
+            )
+        pool.close()
+        pool.join()
 
 
 if __name__ == "__main__":
@@ -286,19 +383,8 @@ if __name__ == "__main__":
         if not os.path.isdir(dir):
             os.mkdir(dir)
 
+    # make_profiles("/home/mlevental/dev_projects/pytorch_shape_inference/cmake-build-debug/bin/pytorch_memory_allocator")
+    # make_all_planned_allocs()
     run_all_mem_experiments(
-        "/home/mlevental/dev_projects/pytorch_shape_inference/cmake-build-debug-clang/bin/pytorch_memory_allocator"
+        "/home/mlevental/dev_projects/pytorch_shape_inference/cmake-build-debug/bin/pytorch_memory_allocator"
     )
-
-    # for i, fp in enumerate(glob.glob("profiles/*.yml")):
-    #     _, fn = os.path.split(fp)
-    #
-    # with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
-    #     for i, fp in enumerate(glob.glob("profiles/*.yml")):
-    #         _, fn = os.path.split(fp)
-    #         model_name, params = os.path.splitext(fn)[0].split(".", 1)
-    #         # make_planned_allocs_csv(model_name, params)
-    #         # pool.apply_async(with_log, (make_planned_allocs_csv, (model_name, params)))
-    #         pool.apply_async(make_planned_allocs_csv, (model_name, params))
-    #     pool.close()
-    #     pool.join()

@@ -4,19 +4,22 @@
 #include "memory_planning.h"
 
 
-std::vector<MemAllocation> greedyBySizeWithSmallestGap(
+std::vector<PlannedAlloc> greedyBySizeWithSmallestGap(
     const SortedLiveRangeMap<size_t>& live_ranges);
 
-std::vector<MemAllocation> greedyBySizeWithFirstGap(
+std::vector<PlannedAlloc> greedyBySizeWithFirstGap(
     const SortedLiveRangeMap<size_t>& live_ranges);
 
-std::vector<MemAllocation> greedyByLongestAndSizeWithFirstGap(
+std::vector<PlannedAlloc> greedyByLongestAndSizeWithFirstGap(
     const SortedLiveRangeMap<size_t>& live_ranges);
 
-std::vector<MemAllocation> greedyByLongestAndSizeWithSmallestGap(
+std::vector<PlannedAlloc> greedyByLongestAndSizeWithSmallestGap(
     const SortedLiveRangeMap<size_t>& live_ranges);
 
-std::vector<MemAllocation> gergov(
+std::vector<PlannedAlloc> gergov(
+    const SortedLiveRangeMap<size_t>& live_ranges);
+
+std::vector<PlannedAlloc> bump_allocator(
     const SortedLiveRangeMap<size_t>& live_ranges);
 
 enum GAP_PRIORITY { FIRST, SMALLEST };

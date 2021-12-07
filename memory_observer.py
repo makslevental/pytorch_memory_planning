@@ -77,7 +77,6 @@ def make_torch_type(typ, nested_type=None):
 
 
 def parse_ops_dict(ops_dict):
-    model_name = ops_dict["model_name"]
     id_to_op = {}
 
     def dfs(op):
@@ -760,7 +759,7 @@ def fix_yaml(model_name):
     f = open(f"profiles/{model_name}.yml", "r+")
     f_lines = f.readlines()
     gr = f_lines[0]
-    if "graph:" in gr:
+    if "graph:" in gr or "graph" not in gr:
         return
     line2 = f_lines[1]
     if "Tensor" in line2:
@@ -790,6 +789,7 @@ def export_memory_reqs(
         mem_events_paired[ptr_addr].append((size, ts))
 
     lvr_to_req_plus_root_caller = {}
+    reqs = []
     for ptr_addr, mem_evts in mem_events_paired.items():
         if len(mem_evts) < 2:
             # warnings.warn(f"no free {mem_evts}")
@@ -803,10 +803,12 @@ def export_memory_reqs(
         assert alloc_size == free_size
         assert alloc_ts < free_ts
         req = RequiredAlloc(LiveRange(alloc_ts, free_ts), alloc_size, ptr_addr)
+        reqs.append(req)
         lvr_to_req_plus_root_caller[req.lvr] = namedtuple(
             "lvr_to_req_plus_root_caller", ["req", "root_caller_fn_name"]
         )(req, alloc_op_id_to_root_caller[alloc_ts])
     return lvr_to_req_plus_root_caller
+    # return reqs
 
 
 if __name__ == "__main__":

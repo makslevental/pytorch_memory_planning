@@ -1,10 +1,10 @@
+import glob
 import os
 from collections import defaultdict
 from operator import itemgetter
+from pprint import pprint
 from typing import List
 
-import numpy as np
-import pandas as pd
 from matplotlib import pyplot as plt, patches
 
 from strategies import PlannedAlloc
@@ -15,19 +15,19 @@ def get_cmap(n, name="spring"):
 
 
 def add_envelope_to_memory_map(
-    fig,
-    ax,
-    x_min,
-    _x_max,
-    _y_min,
-    _y_max,
-    allocations: List[PlannedAlloc],
-    title,
-    *,
-    shade=True,
-    save=True,
-    fp_dir=os.getcwd() + "/memory_maps",
-    rescale_to_mb=True,
+        fig,
+        ax,
+        x_min,
+        _x_max,
+        _y_min,
+        _y_max,
+        allocations: List[PlannedAlloc],
+        title,
+        *,
+        shade=True,
+        save=True,
+        fp_dir=os.getcwd() + "/memory_maps",
+        rescale_to_mb=True,
 ):
     envelope_x = []
     envelope_y = []
@@ -41,8 +41,8 @@ def add_envelope_to_memory_map(
         )
 
         if offset + size > max(
-            [allo.mem_region.offset + allo.mem_region.size for allo in allocations[i:]],
-            default=float("inf"),
+                [allo.mem_region.offset + allo.mem_region.size for allo in allocations[i:]],
+                default=float("inf"),
         ):
             envelope_x.append(end)
             if rescale_to_mb:
@@ -88,12 +88,12 @@ def add_envelope_to_memory_map(
 
 
 def _make_memory_map(
-    allocations: List[PlannedAlloc],
-    title,
-    *,
-    save=True,
-    fp_dir=os.getcwd() + "/memory_maps",
-    rescale_to_mb=True,
+        allocations: List[PlannedAlloc],
+        title,
+        *,
+        save=True,
+        fp_dir=os.getcwd() + "/memory_maps",
+        rescale_to_mb=True,
 ):
     fig, ax = plt.subplots(figsize=(50, 10))
 
@@ -155,13 +155,13 @@ def _make_memory_map(
 
 
 def make_memory_map(
-    allocations: List[PlannedAlloc],
-    title,
-    *,
-    save=True,
-    fp_dir=os.getcwd() + "/memory_maps",
-    rescale_to_mb=True,
-    add_envelope=False,
+        allocations: List[PlannedAlloc],
+        title,
+        *,
+        save=True,
+        fp_dir=os.getcwd() + "/memory_maps",
+        rescale_to_mb=True,
+        add_envelope=False,
 ):
     fig, ax, x_min, x_max, y_min, y_max = _make_memory_map(
         allocations, title, save=save, fp_dir=fp_dir, rescale_to_mb=rescale_to_mb
@@ -205,12 +205,12 @@ strat_colors = {
 
 
 def plot_mem_usage(
-    mem_usage,
-    title,
-    normalizer_name="mip",
-    logy=False,
-    last_one="linear_scan",
-    ylabel="% max mem",
+        mem_usage,
+        title,
+        normalizer_name="mip",
+        logy=False,
+        last_one="linear_scan",
+        ylabel="% max mem",
 ):
     strategies = set()
     for model, strats in mem_usage.items():
@@ -248,9 +248,9 @@ def plot_mem_usage(
             width,
             color=strat_colors[strat],
             label=strat.replace("profiled ", "")
-            .replace("static ", "")
-            .replace("_", " ")
-            .upper(),
+                .replace("static ", "")
+                .replace("_", " ")
+                .upper(),
         )
 
     # Add some text for labels, title and custom x-axis tick labels, etc.
@@ -420,16 +420,117 @@ def plot_jemalloc_heap_profile(fp, model_name):
     plt.close()
 
 
+import termplotlib as tpl
+
+import pandas as pd
+import numpy as np
+
+
+def plot_alloc_distributions():
+    csv_fps = glob.glob("memory_frequencies/*.csv")
+    intermediate_alloc_ns = {}
+    for csv_fp in csv_fps:
+        _, fn = os.path.split(csv_fp)
+        model_name, params = os.path.splitext(fn)[0].split(".", 1)
+        batch_size, hw = params.split(".")
+
+        f = open(csv_fp).read()
+        if f[-1] != ",":
+            print(csv_fp)
+            continue
+        f = f[:-1]
+        model_allocs_intermediate_allocs = f.split(
+            ",[W CPUAllocator.cpp:305] Memory block of unknown size was allocated before the profiling started, profiler results will not include the deallocation event\n"
+        )
+        if len(model_allocs_intermediate_allocs) != 2:
+            print(csv_fp)
+            continue
+        model_allocs, intermediate_allocs = model_allocs_intermediate_allocs
+
+        print(model_name, params)
+        model_allocs = list(map(int, model_allocs.split(",")))
+        intermediate_allocs = list(map(int, intermediate_allocs.split(",")))
+        intermediate_alloc_ns[model_name] = len(intermediate_allocs)
+        # print(pd.Series(map(int, intermediate_allocs)).value_counts(normalize=True))
+
+        counts, bin_edges = np.histogram(
+            intermediate_allocs, bins=min(len(set(intermediate_allocs)), 40)
+        )
+        fig = tpl.figure()
+        fig.hist(counts, bin_edges, orientation="horizontal", force_ascii=False)
+        fig.show()
+
+    pprint(intermediate_alloc_ns)
+
+    counts, bin_edges = np.histogram(list(intermediate_alloc_ns.values()), bins=50)
+    fig = tpl.figure()
+    fig.hist(counts, bin_edges, orientation="horizontal", force_ascii=False)
+    fig.show()
+    # pdb.set_trace()
+
+
+def plot_strat_times():
+    df = pd.read_csv("/home/mlevental/dev_projects/pytorch_memory_planning/strat_times_2.csv",
+                     names=["model", "strat", "time"])
+    df.dropna(axis=0, inplace=True)
+    df2 = df[df["strat"] == "num allocs"]
+    df2 = df2.drop(columns=["strat"])
+    df2 = df2.rename(columns={"time": "num_allocs"})
+    df3 = df[df["strat"] != "num allocs"]
+    df4 = df3.merge(df2, left_on="model", right_on="model")
+    df4["model"] = df4["model"].apply(lambda x: x.split(".", 1)[0])
+
+    piv = pd.pivot_table(df4, values="time", index=["strat", "num_allocs"], aggfunc=np.mean)
+
+    data = {}
+
+    fig, ax = plt.subplots(1,1, figsize=(10, 5))
+    for strat in set(piv.index.get_level_values("strat")):
+        xs, ys = (piv.loc[strat].index.values, piv.loc[strat].values.flatten())
+        if strat == "bump":
+            ys /= 100
+        if strat == "csp":
+            strat = "mip"
+        ax.plot(xs, ys, label=strat)
+    ax.set_yscale('log')
+    fig.legend()
+    fig.show()
+
+def plot_mem_run_times():
+    df = pd.read_csv("/home/mlevental/dev_projects/pytorch_memory_planning/memory_run_times.csv",
+                     header=0)
+
+    pairs = []
+    for i in df.index.values:
+        pairs.append(
+             (df.iloc[i]["batch_size"], df.iloc[i]["hw"])
+        )
+    df1 = df.assign(batch_size_hw=pairs)
+
+    piv = pd.pivot_table(df1, values="ms_per_iter", index=["je_or_me", "model_name", "num_workers"], columns=["batch_size_hw"], aggfunc=np.mean)
+    rat = piv.loc["je"] / piv.loc["me"]
+    rat.to_csv("rat.csv")
+    # with pd.option_context('display.max_rows', None, 'display.max_columns', None):  # more options can be specified also
+    #     print(rat)
+    #
+    # data = {}
+    #
+    # fig, ax = plt.subplots(1,1, figsize=(10, 5))
+    # for strat in set(piv.index.get_level_values("strat")):
+    #     xs, ys = (piv.loc[strat].index.values, piv.loc[strat].values.flatten())
+    #     if strat == "bump":
+    #         ys /= 100
+    #     if strat == "csp":
+    #         strat = "mip"
+    #     ax.plot(xs, ys, label=strat)
+    # ax.set_yscale('log')
+    # fig.legend()
+    # fig.show()
+
+
+
+
 if __name__ == "__main__":
-    df = pd.read_csv(
-        "je_malloc_runs/res.csv",
-        names=["model", "normal", "uptime_ns"],
-    )
-    piv = df.pivot(index="model", columns="normal", values="uptime_ns")
-    piv = piv.dropna()
-    print(df)
-    runs_dir = "je_malloc_runs/"
-    for path, directories, files in os.walk(runs_dir):
-        _, name = os.path.split(path)
-        if "heap_profile.csv" in set(files):
-            plot_jemalloc_heap_profile(f"{path}/heap_profile.csv", name)
+    # plot_alloc_distributions()
+    # plot_strat_times()
+    plot_mem_run_times()
