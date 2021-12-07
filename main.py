@@ -1,6 +1,7 @@
 import glob
 import multiprocessing
 import os
+import subprocess
 import sys
 import time
 import traceback
@@ -9,6 +10,7 @@ from itertools import chain
 from typing import List
 
 import memory_planning
+from numpy import mean
 
 from memory_observer import (
     load_ops_yaml,
@@ -167,6 +169,104 @@ def with_log(fn, args):
         traceback.print_exc()
 
 
+from subprocess import Popen
+
+
+def run_cmd(cmd: List[str], out_pipe, err_pipe):
+    return Popen(cmd, stdout=out_pipe, stderr=err_pipe)
+
+
+def run_mem_experiments_per_model(
+        time_log,
+        err_log,
+        je_or_me,
+        bin_path,
+        model_name,
+        warmup=10,
+        num_loops=10,
+        num_repeats=1,
+):
+    env = {
+        "OPENBLAS_NUM_THREADS": "1",
+        "GOTO_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "MKL_DEBUG_CPU_TYPE": "5",
+    }
+
+    for num_workers_exp in range(7):
+        num_workers = 2 ** num_workers_exp
+        for batch_exp in range(7):
+            batch_size = 2 ** batch_exp
+            for hw_exp in range(7):
+                hw = 2 ** hw_exp
+                if "inception" in model_name and hw < 128:
+                    continue
+                if "alexnet" in model_name and hw < 64:
+                    continue
+                if "dcgan" in model_name and hw < 64:
+                    continue
+
+                cmd = [bin_path]
+                params = list(
+                    map(
+                        str,
+                        [
+                            je_or_me,
+                            model_name,
+                            "csp",
+                            num_workers,
+                            num_repeats,
+                            warmup,
+                            num_loops,
+                            batch_size,
+                            hw,
+                        ],
+                    )
+                )
+                cmd.extend(params)
+                print(" ".join(cmd))
+
+                proc = subprocess.Popen(
+                    cmd,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                try:
+                    outs, errs = proc.communicate()
+                    outs = outs.decode().strip()
+                    time_log.write(f"{outs}\n")
+                    time_log.flush()
+                except Exception as e:
+                    proc.kill()
+                    outs, errs = proc.communicate()
+                    outs = outs.decode().strip()
+                    errs = errs.decode().strip()
+
+                    print(errs, file=sys.stderr)
+                    err_log.write(f"{cmd}; errs: {errs} outs: {outs}")
+                    err_log.flush()
+
+
+def run_all_mem_experiments(
+        bin_path,
+):
+    names = list(map(lambda x: x.strip(), open("model_names.txt").readlines()))
+    with open(f"times.csv", "w", buffering=1) as time_log, open(
+            f"err.log", "w", buffering=1
+    ) as err_log:
+        time_log.write("je_or_me,model_name,batch_size,hw,total,ms_per_iter\n")
+        for je_or_me in ["me", "je"]:
+            for model_name in names:
+                print(model_name)
+                if "alex" not in model_name:
+                    continue
+                run_mem_experiments_per_model(
+                    time_log, err_log, je_or_me, bin_path, model_name
+                )
+
+
 if __name__ == "__main__":
     for dir in [
         "benchmarks",
@@ -180,20 +280,25 @@ if __name__ == "__main__":
         "planned_allocs",
         "profiles",
         "req_allocs",
+        "reqs",
         "symbolic_models",
     ]:
         if not os.path.isdir(dir):
             os.mkdir(dir)
 
-    for i, fp in enumerate(glob.glob("profiles/*.yml")):
-        _, fn = os.path.split(fp)
+    run_all_mem_experiments(
+        "/home/mlevental/dev_projects/pytorch_shape_inference/cmake-build-debug-clang/bin/pytorch_memory_allocator"
+    )
 
-    with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
-        for i, fp in enumerate(glob.glob("profiles/*.yml")):
-            _, fn = os.path.split(fp)
-            model_name, params = os.path.splitext(fn)[0].split(".", 1)
-            # make_planned_allocs_csv(model_name, params)
-            # pool.apply_async(with_log, (make_planned_allocs_csv, (model_name, params)))
-            pool.apply_async(make_planned_allocs_csv, (model_name, params))
-        pool.close()
-        pool.join()
+    # for i, fp in enumerate(glob.glob("profiles/*.yml")):
+    #     _, fn = os.path.split(fp)
+    #
+    # with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+    #     for i, fp in enumerate(glob.glob("profiles/*.yml")):
+    #         _, fn = os.path.split(fp)
+    #         model_name, params = os.path.splitext(fn)[0].split(".", 1)
+    #         # make_planned_allocs_csv(model_name, params)
+    #         # pool.apply_async(with_log, (make_planned_allocs_csv, (model_name, params)))
+    #         pool.apply_async(make_planned_allocs_csv, (model_name, params))
+    #     pool.close()
+    #     pool.join()
